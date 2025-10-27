@@ -1,0 +1,105 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Check for CUDA
+      id: check-cuda
+      run: |
+        if command -v nvidia-smi &> /dev/null; then
+          echo "cuda_available=true" >> $GITHUB_OUTPUT
+        else
+          echo "cuda_available=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Display system info
+      run: |
+        echo "OS: $(uname -a)"
+        echo "GCC version: $(gcc --version | head -n1)"
+        if [ "${{ steps.check-cuda.outputs.cuda_available }}" == "true" ]; then
+          echo "CUDA version: $(nvcc --version)"
+          echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+        else
+          echo "CUDA: Not available (GPU tests will be skipped)"
+        fi
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+    
+    - name: Check code style (optional)
+      run: |
+        # Add clang-format or other style checkers here
+        echo "Style check placeholder - implement as needed"
+    
+    - name: Build project
+      run: |
+        if [ "${{ steps.check-cuda.outputs.cuda_available }}" == "true" ]; then
+          make clean
+          make -j
+        else
+          echo "Skipping build - CUDA not available in CI environment"
+          echo "Note: This is expected for standard GitHub runners"
+        fi
+    
+    - name: Run tests
+      run: |
+        if [ "${{ steps.check-cuda.outputs.cuda_available }}" == "true" ]; then
+          # Add your test commands here
+          # ./build/solve_mps_file -i data/model.mps
+          echo "Tests would run here if CUDA is available"
+        else
+          echo "Skipping tests - CUDA not available"
+        fi
+    
+    - name: Build C examples
+      run: |
+        if [ "${{ steps.check-cuda.outputs.cuda_available }}" == "true" ]; then
+          cd examples/c
+          make
+        else
+          echo "Skipping examples - CUDA not available"
+        fi
+    
+    # Note: Python, Julia, and MATLAB binding tests require additional setup
+    # and are better suited for local testing or specialized CI runners
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Check for TODO and FIXME
+      run: |
+        echo "Checking for unresolved TODOs and FIXMEs..."
+        grep -r "TODO\|FIXME" --include="*.cpp" --include="*.cu" --include="*.h" --include="*.cuh" src/ include/ || true
+    
+    - name: Check for placeholder text
+      run: |
+        echo "Checking for placeholder text..."
+        if grep -r "YOUR_GITHUB_USERNAME\|YOUR_EMAIL\|YOUR_INSTITUTION" --exclude-dir=.github .; then
+          echo "⚠️  Warning: Found placeholder text that should be replaced"
+          exit 1
+        else
+          echo "✅ No placeholder text found"
+        fi
+
+# Note: GitHub's standard runners don't have NVIDIA GPUs.
+# For full testing with GPU, consider:
+# 1. Self-hosted runners with GPU access
+# 2. Cloud-based GPU CI services (e.g., CircleCI with GPU executors)
+# 3. Local testing before pushing

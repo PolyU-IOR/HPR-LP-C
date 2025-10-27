@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or Discussion
+    url: https://github.com/PolyU-IOR/HPR-LP-C/discussions
+    about: For general questions, please use GitHub Discussions
+  - name: Documentation
+    url: https://github.com/PolyU-IOR/HPR-LP-C/blob/main/README.md
+    about: Check the documentation for usage instructions

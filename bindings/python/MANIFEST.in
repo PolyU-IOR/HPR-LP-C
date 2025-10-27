@@ -1,0 +1,27 @@
+# Include C++ source files (relative to bindings/python/)
+recursive-include ../../src *.cpp *.cu *.c
+recursive-include ../../include *.h *.cuh
+
+# Include CMake files
+include ../../CMakeLists.txt
+include CMakeLists.txt
+include ../../cmake/*.cmake.in
+
+# Include documentation
+include ../../README.md
+include ../../LICENSE
+include ../../CHANGELOG.md
+include ../../CONTRIBUTING.md
+
+# Include Python package files
+recursive-include hprlp *.py
+
+# Exclude build artifacts and tests
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude *.o
+global-exclude *.a
+global-exclude *.so
+prune build
+prune dist
+prune .git

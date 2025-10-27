@@ -1,0 +1,85 @@
+# Build artifacts
+build/
+lib/
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# CUDA compiled files
+*.cubin
+*.fatbin
+*.ptx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
+*.egg
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# Python bindings build
+bindings/python/build/
+bindings/python/dist/
+bindings/python/hprlp.egg-info/
+bindings/python/hprlp/*.so
+bindings/python/src/build/
+
+# Julia
+bindings/julia/package/Manifest.toml
+bindings/julia/package/.CondaPkg/
+bindings/julia/package/deps/
+
+# MATLAB
+bindings/matlab/+hprlp/private/*.mexa64
+bindings/matlab/+hprlp/private/*.mexmaci64
+bindings/matlab/+hprlp/private/*.mexw64
+*.asv
+*.mex
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+*.cmake
+!CMakeLists.txt
+!cmake/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Executables
+examples/c/example_direct_lp
+examples/c/example_mps_file
+examples/cpp/example_direct_lp
+examples/cpp/example_mps_file
+
+# Results and logs
+*.log
+*.out
+*.json
+*.csv
+
+# Personal scripts
+my_scripts/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+*.tmp

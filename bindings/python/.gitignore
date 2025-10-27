@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+dist/
+*.egg-info/
+src/build/
+
+# Installation logs
+install_logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Compiled extensions
+*.so
+*.dylib
+*.dll
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+examples/example_modeling.py
+docs/

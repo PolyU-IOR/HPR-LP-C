@@ -1,0 +1,13 @@
+name = "HPRLP"
+uuid = "8b3d4e9a-6f2c-4d5a-9b7e-3c8f5a1d2e4b"
+authors = ["HPRLP Contributors"]
+version = "0.1.0"
+
+[deps]
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+
+[compat]
+julia = "1.6"

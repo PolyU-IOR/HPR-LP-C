@@ -1,0 +1,17 @@
+# Julia package files
+package/Manifest.toml
+
+# Julia temporary files
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+.DS_Store
+*~
+
+# Build artifacts
+deps/
+LocalPreferences.toml
+
+# IDE
+.vscode/
+.idea/
