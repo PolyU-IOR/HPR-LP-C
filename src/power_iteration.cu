@@ -13,12 +13,12 @@ HPRLP_FLOAT power_method_cusparse(HPRLP_workspace_gpu *workspace, int max_iter, 
     HPRLP_FLOAT *z;
     cudaMalloc(&z, m * sizeof(HPRLP_FLOAT));
 
-    // Initialize random vector on host using std::normal_distribution
-    std::mt19937_64 rng(12345); // Mersenne Twister with seed 12345
-    std::normal_distribution<HPRLP_FLOAT> dist(0.0, 1.0); // Mean 0, stddev 1
+    // Initialize random vector on host
+    std::mt19937_64 rng(4); // Mersenne Twister with seed 4
+    std::uniform_real_distribution<HPRLP_FLOAT> dist(0.0, 1.0);
     HPRLP_FLOAT *z_host = new HPRLP_FLOAT[m];
     for (int i = 0; i < m; ++i) {
-        z_host[i] = dist(rng) + 1e-8; // Normal distribution + small offset
+        z_host[i] = dist(rng) + 1e-8;
     }
     cudaMemcpy(z, z_host, m * sizeof(HPRLP_FLOAT), cudaMemcpyHostToDevice);
     
