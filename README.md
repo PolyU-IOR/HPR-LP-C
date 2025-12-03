@@ -124,7 +124,7 @@ For questions, issues, or collaboration inquiries:
 
 Current version: **0.1.0**
 
-## Available HPR-LP implementations
+## Available HPR-LP Implementations
 
 For the C implementation on GPUs, please visit the following repository:
 
