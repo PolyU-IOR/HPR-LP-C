@@ -82,7 +82,11 @@ INCLUDES := -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/cuda_kernels -I$(CUDA_PATH)/includ
 CUDA_LIB_DIR := $(shell if [ -d $(CUDA_PATH)/lib64 ]; then echo $(CUDA_PATH)/lib64; \
                          else echo $(CUDA_PATH)/lib; fi)
 LIB_DIRS := -L$(CUDA_LIB_DIR) -L$(LIB_DIR)
+<<<<<<< HEAD
+LIBS := -lcublas -lcusolver -lcusparse -lcurand
+=======
 LIBS := -lcublas -lcusolver -lcusparse
+>>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 
 # Library sources (solver core without main files)
 LIB_SOURCES := \
