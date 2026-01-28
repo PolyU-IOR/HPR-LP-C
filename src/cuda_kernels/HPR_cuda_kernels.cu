@@ -161,19 +161,12 @@ __global__ void residual_compute_Rd_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *A
 }
 
 
-<<<<<<< HEAD
 __global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
                         HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         HPRLP_FLOAT fact1 = Halpern_params[0];  // Get Halpern iteration parameters
         HPRLP_FLOAT fact2 = Halpern_params[1];
-=======
-__global__ void compute_zx_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
-                        HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
         HPRLP_FLOAT xi = x[i];
         HPRLP_FLOAT ATy_ci = ATy[i] - c[i];
         HPRLP_FLOAT z_temp = xi + sigma * ATy_ci;
@@ -192,7 +185,6 @@ __global__ void compute_zx_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLO
 }
 
 
-<<<<<<< HEAD
 __global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, 
                       HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -200,12 +192,6 @@ __global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRL
         HPRLP_FLOAT fact1 = Halpern_params[0];
         HPRLP_FLOAT fact2 = Halpern_params[1];
         
-=======
-__global__ void compute_x_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, 
-                      HPRLP_FLOAT *last_x, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
         HPRLP_FLOAT xi = x[i];
         HPRLP_FLOAT li = l[i];
         HPRLP_FLOAT ui = u[i];
@@ -218,20 +204,12 @@ __global__ void compute_x_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT
     }
 }
 
-<<<<<<< HEAD
 __global__ void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2,
                         HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < m) {
         HPRLP_FLOAT halpern_fact1 = Halpern_params[0];
         HPRLP_FLOAT halpern_fact2 = Halpern_params[1];
-=======
-
-__global__ void compute_y_1_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2,
-                        HPRLP_FLOAT *last_y, HPRLP_FLOAT halpern_fact1, HPRLP_FLOAT halpern_fact2, int m) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < m) {
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
         HPRLP_FLOAT yi = y[i];
         HPRLP_FLOAT ai = Ax[i];
         HPRLP_FLOAT li = AL[i];
@@ -249,17 +227,11 @@ __global__ void compute_y_1_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRL
     }
 }
 
-<<<<<<< HEAD
 __global__ void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < m) {
         HPRLP_FLOAT halpern_fact1 = Halpern_params[0];
         HPRLP_FLOAT halpern_fact2 = Halpern_params[1];
-=======
-__global__ void compute_y_2_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, HPRLP_FLOAT *last_y, HPRLP_FLOAT halpern_fact1, HPRLP_FLOAT halpern_fact2, int m) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < m) {
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
         HPRLP_FLOAT yi = y[i];
         HPRLP_FLOAT ai = Ax[i];
         HPRLP_FLOAT li = AL[i];
@@ -272,8 +244,4 @@ __global__ void compute_y_2_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT 
         HPRLP_FLOAT y_new_val = halpern_fact2 * y_hat_val + halpern_fact1 * y0i;
         y[i] = y_new_val;
     }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e

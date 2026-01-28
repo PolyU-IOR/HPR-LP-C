@@ -110,14 +110,10 @@ void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
     // allocate memory for the workspace
     int m = workspace->m;
     int n = workspace->n;
-<<<<<<< HEAD
     cudaStreamCreate(&workspace->stream);
 
     cudaMalloc((void**)&workspace->Halpern_params, 2 * sizeof(HPRLP_FLOAT));   // For Halpern iteration parameters
     cudaMemset(workspace->Halpern_params, 0, 2 * sizeof(HPRLP_FLOAT));
-=======
-
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 
     create_zero_vector_device(workspace->x, n);
     create_zero_vector_device(workspace->last_x, n);
@@ -147,7 +143,6 @@ void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
 
     workspace->check = false;
 
-<<<<<<< HEAD
     workspace->graph = nullptr;  // Initialize CUDA Graph pointer
     workspace->graph_exec = nullptr;
     workspace->graph_initialized = false;
@@ -159,11 +154,6 @@ void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
     if (workspace->spmv_AT->cusparseHandle != workspace->spmv_A->cusparseHandle) {
          cusparseSetStream(workspace->spmv_AT->cusparseHandle, workspace->stream);
     }
-=======
-    cublasCreate(&workspace->cublasHandle);
-    
-    prepare_spmv(workspace);
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 }
 
 
@@ -210,7 +200,6 @@ void free_workspace(HPRLP_workspace_gpu *workspace) {
         delete workspace->spmv_A;
         workspace->spmv_A = nullptr;
     }
-<<<<<<< HEAD
 
     // Destroy CUDA Graph resources
     if (workspace->graph_exec) {
@@ -227,8 +216,6 @@ void free_workspace(HPRLP_workspace_gpu *workspace) {
         cudaFree(workspace->Halpern_params);
         workspace->Halpern_params = nullptr;
     }
-=======
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
     
     // NOW free device vectors (after descriptors are destroyed)
     if (workspace->x) cudaFree(workspace->x);

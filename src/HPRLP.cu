@@ -57,7 +57,6 @@ static int initialize_device(int device_id) {
     return 0;
 }
 
-<<<<<<< HEAD
 static double compute_maximum_eigenvalue(HPRLP_workspace_gpu *ws, const HPRLP_parameters *params) {
     clock_t t_start = clock();
     
@@ -93,8 +92,6 @@ void rebuild_cuda_graph(HPRLP_workspace_gpu *ws) {
     ws->graph_initialized = true;
 }
 
-=======
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_parameters *param) {
 
     // Print startup banner
@@ -124,12 +121,7 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     /* ----------The alg time is started!---------- */
     auto t_start_alg = time_now();
 
-<<<<<<< HEAD
     compute_maximum_eigenvalue(&workspace, param);
-    // workspace.lambda_max = power_method_cusparse(&workspace) * 1.01;
-=======
-    workspace.lambda_max = power_method_cusparse(&workspace) * 1.01;
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 
     // ### Initialization ###
     HPRLP_residuals residuals;
@@ -139,15 +131,10 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     else{
         workspace.sigma = 1.0;
     }
-<<<<<<< HEAD
     HPRLP_restart restart_info ={};
     restart_info.best_sigma = workspace.sigma;
     restart_info.restart_flag = 0;
     restart_info.first_restart = true;
-=======
-    HPRLP_restart restart_info;
-    restart_info.best_sigma = workspace.sigma;
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 
     HPRLP_results output;
     bool first_4 = true;
@@ -256,7 +243,6 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
 
         do_restart(&workspace, &restart_info);
 
-<<<<<<< HEAD
         if (iter == 0 || restart_info.restart_flag > 0) {
             rebuild_cuda_graph(&workspace);
         }
@@ -277,16 +263,6 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
         } else {
             cudaGraphLaunch(workspace.graph_exec, workspace.stream);
         }
-=======
-        workspace.check = ((iter + 1) % param->check_iter == 0 || restart_info.restart_flag > 0);
-        workspace.check = (workspace.check || (iter + 1) % step(iter + 1) == 0);
-
-        HPRLP_FLOAT fact1 = 1.0 / (restart_info.inner + 2.0);
-        HPRLP_FLOAT fact2 = 1.0 - fact1;
-
-        update_z_x(&workspace, fact1, fact2);
-        update_y(&workspace, fact1, fact2);
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
 
         if ((iter + 1) % param->check_iter == 0) {
             restart_info.current_gap = compute_weighted_norm(&workspace);

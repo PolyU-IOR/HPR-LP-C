@@ -111,10 +111,7 @@ if(BUILD_STATIC_LIB)
             CUDA::cublas
             CUDA::cusolver
             CUDA::cusparse
-<<<<<<< HEAD
             CUDA::curand
-=======
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
     )
     
     # Set library properties
@@ -144,10 +141,7 @@ if(BUILD_SHARED_LIB)
             CUDA::cublas
             CUDA::cusolver
             CUDA::cusparse
-<<<<<<< HEAD
             CUDA::curand
-=======
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
     )
     
     # Set library properties

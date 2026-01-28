@@ -120,7 +120,6 @@ struct HPRLP_workspace_gpu {
     HPRLP_FLOAT *Ax;
     HPRLP_FLOAT *ATy;
 
-<<<<<<< HEAD
     HPRLP_FLOAT *Halpern_params;  // The vector to store the parameters used in Halpern iteration
 
     cudaGraph_t graph;            // CUDA Graph for capturing the main iteration
@@ -129,8 +128,6 @@ struct HPRLP_workspace_gpu {
 
     cudaStream_t stream;
 
-=======
->>>>>>> fbb102f935dec8faba4968ef6258196134cb9a4e
     bool check;                 // Normally used to indicate whether the termination conditions should be checked
 
     cublasHandle_t cublasHandle;
