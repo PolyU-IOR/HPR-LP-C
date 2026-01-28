@@ -57,6 +57,41 @@ static int initialize_device(int device_id) {
     return 0;
 }
 
+static double compute_maximum_eigenvalue(HPRLP_workspace_gpu *ws, const HPRLP_parameters *params) {
+    clock_t t_start = clock();
+    
+    std::cout << "ESTIMATING MAXIMUM EIGENVALUE ..." << std::endl;
+
+    double lambda_max = power_method_cusparse(ws, 5000, 1e-4) * 1.01;
+    
+    ws->lambda_max = lambda_max;
+
+    double power_time = (double)(clock() - t_start) / CLOCKS_PER_SEC;
+
+
+    std::cout << "ESTIMATING MAXIMUM EIGENVALUE time = " << std::fixed << std::setprecision(2) << power_time << " seconds" << std::endl;
+    std::cout << "estimated maximum eigenvalue of AAT = " << std::scientific << std::setprecision(2) << lambda_max << std::defaultfloat << std::endl;
+
+    return power_time;
+}
+
+void rebuild_cuda_graph(HPRLP_workspace_gpu *ws) {
+    if (ws->graph_exec != nullptr) {
+        cudaGraphExecDestroy(ws->graph_exec);
+    }
+    if (ws->graph != nullptr) cudaGraphDestroy(ws->graph);
+
+    cudaStreamBeginCapture(ws->stream, cudaStreamCaptureModeGlobal);
+    
+    update_zx_normal_gpu(ws);
+    update_y_normal_gpu(ws);
+
+    cudaStreamEndCapture(ws->stream, &ws->graph);
+    
+    cudaGraphInstantiate(&ws->graph_exec, ws->graph, nullptr, nullptr, 0);
+    ws->graph_initialized = true;
+}
+
 HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_parameters *param) {
 
     // Print startup banner
@@ -86,7 +121,7 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     /* ----------The alg time is started!---------- */
     auto t_start_alg = time_now();
 
-    workspace.lambda_max = power_method_cusparse(&workspace) * 1.01;
+    compute_maximum_eigenvalue(&workspace, param);
 
     // ### Initialization ###
     HPRLP_residuals residuals;
@@ -96,8 +131,10 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     else{
         workspace.sigma = 1.0;
     }
-    HPRLP_restart restart_info;
+    HPRLP_restart restart_info ={};
     restart_info.best_sigma = workspace.sigma;
+    restart_info.restart_flag = 0;
+    restart_info.first_restart = true;
 
     HPRLP_results output;
     bool first_4 = true;
@@ -206,14 +243,26 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
 
         do_restart(&workspace, &restart_info);
 
+        if (iter == 0 || restart_info.restart_flag > 0) {
+            rebuild_cuda_graph(&workspace);
+        }
+
+        HPRLP_FLOAT h_f1 = 1.0 / (restart_info.inner + 2.0);
+        HPRLP_FLOAT h_f2 = 1.0 - h_f1;
+        HPRLP_FLOAT h_params[2] = {h_f1, h_f2};
+        CUDA_CHECK(cudaMemcpyAsync(workspace.Halpern_params, h_params, 2*sizeof(HPRLP_FLOAT),
+                           cudaMemcpyHostToDevice, workspace.stream));
+
+
         workspace.check = ((iter + 1) % param->check_iter == 0 || restart_info.restart_flag > 0);
         workspace.check = (workspace.check || (iter + 1) % step(iter + 1) == 0);
 
-        HPRLP_FLOAT fact1 = 1.0 / (restart_info.inner + 2.0);
-        HPRLP_FLOAT fact2 = 1.0 - fact1;
-
-        update_z_x(&workspace, fact1, fact2);
-        update_y(&workspace, fact1, fact2);
+        if (workspace.check) {
+            update_zx_check_gpu(&workspace);
+            update_y_check_gpu(&workspace);
+        } else {
+            cudaGraphLaunch(workspace.graph_exec, workspace.stream);
+        }
 
         if ((iter + 1) % param->check_iter == 0) {
             restart_info.current_gap = compute_weighted_norm(&workspace);
