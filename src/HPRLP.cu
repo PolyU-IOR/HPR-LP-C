@@ -12,13 +12,13 @@
  */
 static void print_banner() {
     std::cout << "\n";
-    std::cout << "══════════════════════════════════════════════════════════════════\n";
+    std::cout << "==================================================================\n";
     std::cout << "                          HPR-LP Solver                           \n";
     std::cout << "     Halpern Peaceman-Rachford Linear Programming Solver          \n";
     std::cout << "                                                                  \n";
     std::cout << "  Version: " << HPRLP_VERSION_STRING << "                          \n";
     std::cout << "                                                                  \n";
-    std::cout << "══════════════════════════════════════════════════════════════════\n";
+    std::cout << "==================================================================\n";
     std::cout << "\n";
 }
 
