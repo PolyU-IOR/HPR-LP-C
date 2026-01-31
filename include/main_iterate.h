@@ -25,10 +25,11 @@ void update_sigma(HPRLP_restart *restart_info, HPRLP_workspace_gpu *ws, HPRLP_re
 // Perform restart
 void do_restart(HPRLP_workspace_gpu *ws, HPRLP_restart *restart_info);
 
-/// The following main update should directly use the cuda kernel functions
-void update_z_x(HPRLP_workspace_gpu *ws, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2);
+void update_zx_check_gpu(HPRLP_workspace_gpu *ws);
+void update_zx_normal_gpu(HPRLP_workspace_gpu *ws);
 
-void update_y(HPRLP_workspace_gpu *ws, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2);
+void update_y_check_gpu(HPRLP_workspace_gpu *ws);
+void update_y_normal_gpu(HPRLP_workspace_gpu *ws);
 
 HPRLP_FLOAT compute_weighted_norm(HPRLP_workspace_gpu *ws);
 

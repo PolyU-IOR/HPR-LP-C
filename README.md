@@ -124,6 +124,20 @@ For questions, issues, or collaboration inquiries:
 
 Current version: **0.1.0**
 
-## Other Implementations
-For the complete Julia implementation and source code, please visit the main repository:  
+## Available HPR-LP Implementations
+
+For the C implementation on GPUs, please visit the following repository:
+
+[https://github.com/PolyU-IOR/HPR-LP-C](https://github.com/PolyU-IOR/HPR-LP-C)
+
+For the Julia implementation on CPUs and GPUs, please visit the following repository:
+
 [https://github.com/PolyU-IOR/HPR-LP](https://github.com/PolyU-IOR/HPR-LP)
+
+For the Python implementation on GPUs, please visit the following repository:
+
+[https://github.com/PolyU-IOR/HPR-LP-Python](https://github.com/PolyU-IOR/HPR-LP-Python)
+
+For the MATLAB implementation on CPUs, please visit the following repository:  
+
+[https://github.com/PolyU-IOR/HPR-LP-MATLAB](https://github.com/PolyU-IOR/HPR-LP-MATLAB)

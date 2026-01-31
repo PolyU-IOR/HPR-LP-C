@@ -160,43 +160,58 @@ std::string check_stopping(HPRLP_residuals *residuals, int iter, std::chrono::st
     return "CONTINUE";
 }
 
-
-void update_z_x(HPRLP_workspace_gpu *ws, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2) {
+void update_zx_check_gpu(HPRLP_workspace_gpu *ws) {
     cusparseSpMV(ws->spmv_AT->cusparseHandle, ws->spmv_AT->_operator,
-                    &ws->spmv_AT->alpha, ws->spmv_AT->AT_cusparseDescr, ws->spmv_AT->y_cusparseDescr, 
-                    &ws->spmv_AT->beta, ws->spmv_AT->ATy_cusparseDescr, ws->spmv_AT->computeType,
-                    ws->spmv_AT->alg, ws->spmv_AT->buffer);
+                 &ws->spmv_AT->alpha, ws->spmv_AT->AT_cusparseDescr, ws->spmv_AT->y_cusparseDescr,
+                 &ws->spmv_AT->beta, ws->spmv_AT->ATy_cusparseDescr, ws->spmv_AT->computeType,
+                 ws->spmv_AT->alg, ws->spmv_AT->buffer);
 
-    // directly combine Halpern step here 
-    if(ws->check){
-        compute_zx_kernel<<<numBlocks(ws->n), numThreads>>>(ws->x_temp, ws->x, ws->z_bar, ws->x_bar, ws->x_hat,
-                                                            ws->l, ws->u, ws->sigma, ws->ATy, ws->c, ws->last_x,
-                                                            fact1, fact2, ws->n);
-    }
-    else{
-        compute_x_kernel<<<numBlocks(ws->n), numThreads>>>(ws->x, ws->x_hat, ws->l, ws->u, ws->sigma,
-                                                            ws->ATy, ws->c, ws->last_x, fact1, fact2, ws->n);
-    }
+    update_zx_check_kernel<<<numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+        ws->x_temp, ws->x, ws->z_bar, ws->x_bar, ws->x_hat,
+        ws->l, ws->u, ws->sigma, ws->ATy, ws->c, ws->last_x,
+        ws->Halpern_params, ws->n);
 }
 
+void update_zx_normal_gpu(HPRLP_workspace_gpu *ws) {
+    cusparseSpMV(ws->spmv_AT->cusparseHandle, ws->spmv_AT->_operator,
+                 &ws->spmv_AT->alpha, ws->spmv_AT->AT_cusparseDescr, ws->spmv_AT->y_cusparseDescr,
+                 &ws->spmv_AT->beta, ws->spmv_AT->ATy_cusparseDescr, ws->spmv_AT->computeType,
+                 ws->spmv_AT->alg, ws->spmv_AT->buffer);
 
-void update_y(HPRLP_workspace_gpu *ws, HPRLP_FLOAT halpern_fact1, HPRLP_FLOAT halpern_fact2) {
+    update_zx_normal_kernel<<<numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+        ws->x, ws->x_hat,
+        ws->l, ws->u, ws->sigma,
+        ws->ATy, ws->c, ws->last_x,
+        ws->Halpern_params, ws->n);
+}
 
+void update_y_check_gpu(HPRLP_workspace_gpu *ws) {
     cusparseSpMV(ws->spmv_A->cusparseHandle, ws->spmv_A->_operator,
-                            &ws->spmv_A->alpha, ws->spmv_A->A_cusparseDescr, ws->spmv_A->x_hat_cusparseDescr, 
-                            &ws->spmv_A->beta, ws->spmv_A->Ax_cusparseDescr, ws->spmv_A->computeType,
-                            ws->spmv_A->alg, ws->spmv_A->buffer);
+                &ws->spmv_A->alpha, ws->spmv_A->A_cusparseDescr, ws->spmv_A->x_hat_cusparseDescr, 
+                &ws->spmv_A->beta, ws->spmv_A->Ax_cusparseDescr, ws->spmv_A->computeType,
+                ws->spmv_A->alg, ws->spmv_A->buffer);
     
     HPRLP_FLOAT fact1 = ws->lambda_max * ws->sigma;
     HPRLP_FLOAT fact2 = 1.0 / fact1;
 
-    if(ws->check){
-        compute_y_1_kernel<<<numBlocks(ws->m), numThreads>>>(ws->y_temp, ws->y_bar, ws->y, ws->y_obj, ws->AL, ws->AU,
-                                                            ws->Ax, fact1, fact2, ws->last_y, halpern_fact1, halpern_fact2, ws->m);
-    }
-    else{
-        compute_y_2_kernel<<<numBlocks(ws->m), numThreads>>>(ws->y, ws->AL, ws->AU, ws->Ax, fact1, fact2, ws->last_y, halpern_fact1, halpern_fact2, ws->m);
-    }
+    update_y_check_kernel<<<numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+        ws->y_temp, ws->y_bar, ws->y, ws->y_obj, ws->AL, ws->AU,
+        ws->Ax, fact1, fact2, ws->last_y, ws->Halpern_params, ws->m);
+}
+
+
+void update_y_normal_gpu(HPRLP_workspace_gpu *ws) {
+    cusparseSpMV(ws->spmv_A->cusparseHandle, ws->spmv_A->_operator,
+                &ws->spmv_A->alpha, ws->spmv_A->A_cusparseDescr, ws->spmv_A->x_hat_cusparseDescr, 
+                &ws->spmv_A->beta, ws->spmv_A->Ax_cusparseDescr, ws->spmv_A->computeType,
+                ws->spmv_A->alg, ws->spmv_A->buffer);
+    
+    HPRLP_FLOAT fact1 = ws->lambda_max * ws->sigma;
+    HPRLP_FLOAT fact2 = 1.0 / fact1;
+
+    update_y_normal_kernel<<<numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+        ws->y, ws->AL, ws->AU, ws->Ax, fact1, fact2, 
+        ws->last_y, ws->Halpern_params, ws->m);
 }
 
 
