@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hprlp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python bindings for the GPU-accelerated Halpern Peaceman--Rachford linear programming solver"
 readme = "README.md"
 license = {text = "MIT"}

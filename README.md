@@ -106,7 +106,8 @@ Kaihuang Chen, [Defeng Sun](https://www.polyu.edu.hk/ama/profile/dfsun//), [Yanc
 
 ### Core Team
 - **Kaihuang Chen** - Developer
-- **ZheXuan Gu** - Developer
+- **Zhexuan Gu** - Developer
+- **Jiawei Lu** - Developer
 - **Defeng Sun** - Principal Investigator
 - **Yancheng Yuan** - Contributor
 - **Guojun Zhang** - Contributor
@@ -122,7 +123,7 @@ For questions, issues, or collaboration inquiries:
 
 ## Version
 
-Current version: **0.1.0**
+Current version: **0.1.1**
 
 ## Available HPR-LP Implementations
 

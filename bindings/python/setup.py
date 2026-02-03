@@ -346,7 +346,7 @@ long_description = readme_path.read_text(encoding='utf-8') if readme_path.exists
 
 setup(
     name='hprlp',
-    version='0.1.0',
+    version='0.1.1',
     author='HPR-LP Contributors',
     description='Python bindings for the GPU-accelerated Halpern–Peaceman–Rachford linear programming solver',
     long_description=long_description,

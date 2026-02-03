@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(HPRLP VERSION 0.1.0 LANGUAGES CXX CUDA)
+project(HPRLP VERSION 0.1.1 LANGUAGES CXX CUDA)
 
 # Set C++ and CUDA standards (C++11 for better compatibility with MATLAB and older systems)
 set(CMAKE_CXX_STANDARD 11)

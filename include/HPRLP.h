@@ -9,7 +9,7 @@
  * using GPU acceleration with the Halpern-Peaceman-Rachford splitting method.
  * 
  * @author HPRLP Contributors
- * @version 0.1.0
+ * @version 0.1.1
  */
 
 #include "structs.h"        // Data structures for LP problems

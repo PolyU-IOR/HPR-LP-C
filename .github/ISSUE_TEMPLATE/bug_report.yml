@@ -56,7 +56,7 @@ body:
         - CUDA Version: [e.g., 12.4]
         - GPU Model: [e.g., NVIDIA RTX 4090]
         - GCC Version: [e.g., 11.4.0]
-        - HPRLP Version: [e.g., 0.1.0]
+        - HPRLP Version: [e.g., 0.1.1]
     validations:
       required: true
 
