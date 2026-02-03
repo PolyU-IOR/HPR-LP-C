@@ -2,6 +2,28 @@
 
 A C implementation of the Halpern Peaceman--Rachford (HPR) method for solving linear programming (LP) problems on GPUs.
 
+## Version
+
+Current version: **0.1.1**
+
+## Available HPR-LP Implementations
+
+For the C implementation on GPUs, please visit the following repository:
+
+[https://github.com/PolyU-IOR/HPR-LP-C](https://github.com/PolyU-IOR/HPR-LP-C)
+
+For the Julia implementation on CPUs and GPUs, please visit the following repository:
+
+[https://github.com/PolyU-IOR/HPR-LP](https://github.com/PolyU-IOR/HPR-LP)
+
+For the Python implementation on GPUs, please visit the following repository:
+
+[https://github.com/PolyU-IOR/HPR-LP-Python](https://github.com/PolyU-IOR/HPR-LP-Python)
+
+For the MATLAB implementation on CPUs, please visit the following repository:  
+
+[https://github.com/PolyU-IOR/HPR-LP-MATLAB](https://github.com/PolyU-IOR/HPR-LP-MATLAB)
+
 ## Requirements
 
 - NVIDIA GPU with CUDA support
@@ -120,25 +142,3 @@ Kaihuang Chen, [Defeng Sun](https://www.polyu.edu.hk/ama/profile/dfsun//), [Yanc
 
 For questions, issues, or collaboration inquiries:
 - Open an issue on GitHub: https://github.com/PolyU-IOR/HPR-LP-C/issues
-
-## Version
-
-Current version: **0.1.1**
-
-## Available HPR-LP Implementations
-
-For the C implementation on GPUs, please visit the following repository:
-
-[https://github.com/PolyU-IOR/HPR-LP-C](https://github.com/PolyU-IOR/HPR-LP-C)
-
-For the Julia implementation on CPUs and GPUs, please visit the following repository:
-
-[https://github.com/PolyU-IOR/HPR-LP](https://github.com/PolyU-IOR/HPR-LP)
-
-For the Python implementation on GPUs, please visit the following repository:
-
-[https://github.com/PolyU-IOR/HPR-LP-Python](https://github.com/PolyU-IOR/HPR-LP-Python)
-
-For the MATLAB implementation on CPUs, please visit the following repository:  
-
-[https://github.com/PolyU-IOR/HPR-LP-MATLAB](https://github.com/PolyU-IOR/HPR-LP-MATLAB)
