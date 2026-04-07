@@ -28,6 +28,8 @@ class Parameters:
         Enable Pock-Chambolle scaling (default: True)
     use_bc_scaling : bool
         Enable bound constraint scaling (default: True)
+    use_presolve : bool
+        Enable embedded PSLP presolve/postsolve (default: True)
     
     Examples
     --------
@@ -48,6 +50,7 @@ class Parameters:
         self.use_Ruiz_scaling = True
         self.use_Pock_Chambolle_scaling = True
         self.use_bc_scaling = True
+        self.use_presolve = True
     
     def __repr__(self):
         return (f"Parameters(max_iter={self.max_iter}, "
@@ -72,6 +75,7 @@ class Parameters:
             param.use_Ruiz_scaling = self.use_Ruiz_scaling
             param.use_Pock_Chambolle_scaling = self.use_Pock_Chambolle_scaling
             param.use_bc_scaling = self.use_bc_scaling
+            param.use_presolve = self.use_presolve
             return param
         except ImportError:
             return self
@@ -98,4 +102,5 @@ class Parameters:
             'use_Ruiz_scaling': self.use_Ruiz_scaling,
             'use_Pock_Chambolle_scaling': self.use_Pock_Chambolle_scaling,
             'use_bc_scaling': self.use_bc_scaling,
+            'use_presolve': self.use_presolve,
         }

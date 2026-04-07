@@ -1,7 +1,6 @@
 #ifndef HPRLP_STRUCTS_H
 #define HPRLP_STRUCTS_H
 
-#include <chrono>
 #include <cstdint>
 #include <cublas_v2.h>
 #include <cusparse_v2.h>
@@ -36,6 +35,7 @@ struct HPRLP_parameters {
     bool use_Ruiz_scaling = true;
     bool use_Pock_Chambolle_scaling = true;
     bool use_bc_scaling = true;
+    bool use_presolve = true;
 };
 
 
@@ -60,6 +60,7 @@ struct HPRLP_results {
     // Solution vectors (allocated on host)
     HPRLP_FLOAT *x = nullptr;     // Primal solution
     HPRLP_FLOAT *y = nullptr;     // Dual solution
+    HPRLP_FLOAT *z = nullptr;     // Bound dual solution
 };
 
 

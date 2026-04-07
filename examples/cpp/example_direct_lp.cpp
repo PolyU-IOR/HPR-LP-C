@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
         // Clean up result arrays
         free(result.x);
         free(result.y);
+        free(result.z);
     }
     
     std::cout << "══════════════════════════════════════════════════════════════════\n";

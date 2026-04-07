@@ -11,6 +11,7 @@
 #include "HPRLP.h"
 #include "mps_reader.h"
 #include "preprocess.h"
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <cmath>
@@ -316,6 +317,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             if ((field = mxGetField(param_struct, 0, "use_bc_scaling")) != NULL) {
                 param->use_bc_scaling = getScalarBool(field, "use_bc_scaling");
             }
+            if ((field = mxGetField(param_struct, 0, "use_presolve")) != NULL) {
+                param->use_presolve = getScalarBool(field, "use_presolve");
+            }
         }
         
         // Call C library function
@@ -325,8 +329,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         const char* field_names[] = {"status", "residuals", "primal_obj", "gap",
                                     "time4", "time6", "time8", "time",
                                     "iter4", "iter6", "iter8", "iter",
-                                    "x", "y"};
-        plhs[0] = mxCreateStructMatrix(1, 1, 14, field_names);
+                        "x", "y", "z"};
+        plhs[0] = mxCreateStructMatrix(1, 1, 15, field_names);
         
         // Set status
         mxSetField(plhs[0], 0, "status", mxCreateString(result.status));
@@ -356,7 +360,7 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 x_ptr[i] = result.x[i];
             }
             mxSetField(plhs[0], 0, "x", x_array);
-            delete[] result.x;  // Free C++ allocated memory
+            free(result.x);
         } else {
             mxSetField(plhs[0], 0, "x", mxCreateDoubleMatrix(0, 0, mxREAL));
         }
@@ -369,9 +373,21 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
                 y_ptr[i] = result.y[i];
             }
             mxSetField(plhs[0], 0, "y", y_array);
-            delete[] result.y;  // Free C++ allocated memory
+            free(result.y);
         } else {
             mxSetField(plhs[0], 0, "y", mxCreateDoubleMatrix(0, 0, mxREAL));
+        }
+
+        if (result.z != NULL) {
+            mxArray* z_array = mxCreateDoubleMatrix(n, 1, mxREAL);
+            double* z_ptr = mxGetPr(z_array);
+            for (int i = 0; i < n; i++) {
+                z_ptr[i] = result.z[i];
+            }
+            mxSetField(plhs[0], 0, "z", z_array);
+            free(result.z);
+        } else {
+            mxSetField(plhs[0], 0, "z", mxCreateDoubleMatrix(0, 0, mxREAL));
         }
         
         return;

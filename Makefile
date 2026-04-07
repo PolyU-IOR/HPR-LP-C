@@ -9,6 +9,7 @@ CUDA_PATH ?= $(shell if [ -d /usr/local/cuda ]; then echo /usr/local/cuda; \
                       else echo /usr/local/cuda; fi)
 
 NVCC := $(CUDA_PATH)/bin/nvcc
+CC := $(shell command -v gcc >/dev/null 2>&1 && echo gcc || echo cc)
 AR := ar
 RANLIB := ranlib
 
@@ -71,12 +72,16 @@ SRC_DIR := src
 INCLUDE_DIR := include
 BUILD_DIR := build
 LIB_DIR := lib
+PSLP_DIR := third_party/PSLP
 
 # Flags and includes
 # Use C++11 for better compatibility with MATLAB and older systems
 # Add flags to avoid GLIBCXX_3.4.32 dependency when possible
 NVCC_FLAGS := -w -O2 --std=c++11 $(CUDA_ARCH) -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0 -ccbin $(HOST_COMPILER)
 INCLUDES := -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/cuda_kernels -I$(CUDA_PATH)/include
+PSLP_INCLUDES := -I$(PSLP_DIR)/include/PSLP -I$(PSLP_DIR)/include/core -I$(PSLP_DIR)/include/data_structures -I$(PSLP_DIR)/include/explorers
+PSLP_DEFINES := -DPSLP_VERSION=\"0.0.8\" -D_POSIX_C_SOURCE=200809L -DNDEBUG
+PSLP_CFLAGS := -O3 -fPIC
 
 # Libraries - auto-detect lib vs lib64
 CUDA_LIB_DIR := $(shell if [ -d $(CUDA_PATH)/lib64 ]; then echo $(CUDA_PATH)/lib64; \
@@ -86,6 +91,7 @@ LIBS := -lcublas -lcusolver -lcusparse -lcurand
 
 # Library sources (solver core without main files)
 LIB_SOURCES := \
+	$(SRC_DIR)/pslp_integration.cpp \
 	$(SRC_DIR)/mps_reader.cpp \
 	$(SRC_DIR)/utils.cu \
 	$(SRC_DIR)/scaling.cu \
@@ -95,9 +101,13 @@ LIB_SOURCES := \
 	$(SRC_DIR)/HPRLP.cu \
 	$(SRC_DIR)/cuda_kernels/HPR_cuda_kernels.cu
 
+PSLP_SOURCES := $(filter-out $(PSLP_DIR)/src/core/Debugger.c,$(wildcard $(PSLP_DIR)/src/core/*.c)) $(wildcard $(PSLP_DIR)/src/explorers/*.c)
+
 # Object files for library
 LIB_OBJECTS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(filter %.cpp,$(LIB_SOURCES))) \
                $(patsubst $(SRC_DIR)/%.cu,$(BUILD_DIR)/%.o,$(filter %.cu,$(LIB_SOURCES)))
+
+PSLP_OBJECTS := $(patsubst $(PSLP_DIR)/%.c,$(BUILD_DIR)/pslp/%.o,$(PSLP_SOURCES))
 
 # Static library
 STATIC_LIB := $(LIB_DIR)/libhprlp.a
@@ -113,16 +123,16 @@ all: $(STATIC_LIB) $(SHARED_LIB) $(RUN_MPS)
 shared: $(SHARED_LIB)
 
 # Build static library
-$(STATIC_LIB): $(LIB_OBJECTS) | $(LIB_DIR)
+$(STATIC_LIB): $(LIB_OBJECTS) $(PSLP_OBJECTS) | $(LIB_DIR)
 	@echo "Creating static library libhprlp.a..."
-	@$(AR) rcs $@ $(LIB_OBJECTS)
+	@$(AR) rcs $@ $(LIB_OBJECTS) $(PSLP_OBJECTS)
 	@$(RANLIB) $@
 
 # Build shared library (for Python ctypes)
 # Use -Xcompiler to pass static linking flags to the host compiler
-$(SHARED_LIB): $(LIB_OBJECTS) | $(LIB_DIR)
+$(SHARED_LIB): $(LIB_OBJECTS) $(PSLP_OBJECTS) | $(LIB_DIR)
 	@echo "Creating shared library libhprlp.so..."
-	@$(NVCC) -shared $(NVCC_FLAGS) -o $@ $(LIB_OBJECTS) $(LIB_DIRS) $(LIBS) \
+	@$(NVCC) -shared $(NVCC_FLAGS) -o $@ $(LIB_OBJECTS) $(PSLP_OBJECTS) $(LIB_DIRS) $(LIBS) \
 		-Xlinker --exclude-libs,ALL \
 		-Xcompiler -static-libstdc++ \
 		-Xcompiler -static-libgcc
@@ -130,15 +140,19 @@ $(SHARED_LIB): $(LIB_OBJECTS) | $(LIB_DIR)
 # Compile library object files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/cuda_kernels
 	@echo "Compiling $(notdir $<)..."
-	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) $(PSLP_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cu | $(BUILD_DIR) $(BUILD_DIR)/cuda_kernels
 	@echo "Compiling $(notdir $<)..."
-	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) $(PSLP_INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/cuda_kernels/%.o: $(SRC_DIR)/cuda_kernels/%.cu | $(BUILD_DIR)/cuda_kernels
 	@echo "Compiling $(notdir $<)..."
-	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -c $< -o $@
+	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) $(PSLP_INCLUDES) -c $< -o $@
+
+$(BUILD_DIR)/pslp/%.o: $(PSLP_DIR)/%.c | $(BUILD_DIR)/pslp $(BUILD_DIR)/pslp/src $(BUILD_DIR)/pslp/src/core $(BUILD_DIR)/pslp/src/explorers
+	@echo "Compiling PSLP $(notdir $<)..."
+	@$(CC) $(PSLP_CFLAGS) $(PSLP_INCLUDES) $(PSLP_DEFINES) -c $< -o $@
 
 # MPS file reader executable (statically linked for standalone use)
 $(RUN_MPS): $(SRC_DIR)/solve_mps_file.cpp $(STATIC_LIB) | $(BUILD_DIR)
@@ -152,6 +166,18 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/cuda_kernels:
 	@mkdir -p $(BUILD_DIR)/cuda_kernels
+
+$(BUILD_DIR)/pslp:
+	@mkdir -p $(BUILD_DIR)/pslp
+
+$(BUILD_DIR)/pslp/src:
+	@mkdir -p $(BUILD_DIR)/pslp/src
+
+$(BUILD_DIR)/pslp/src/core:
+	@mkdir -p $(BUILD_DIR)/pslp/src/core
+
+$(BUILD_DIR)/pslp/src/explorers:
+	@mkdir -p $(BUILD_DIR)/pslp/src/explorers
 
 $(LIB_DIR):
 	@mkdir -p $(LIB_DIR)

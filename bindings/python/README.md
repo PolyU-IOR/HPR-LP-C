@@ -120,12 +120,14 @@ Solver configuration:
 - `use_Ruiz_scaling` - Ruiz scaling (default: True)
 - `use_Pock_Chambolle_scaling` - Pock-Chambolle scaling (default: True)
 - `use_bc_scaling` - Bounds/cost scaling (default: True)
+- `use_presolve` - Embedded PSLP presolve/postsolve in the C core (default: True)
 
 ### `Results`
 Solution information:
 - `status` - "OPTIMAL", "TIME_LIMIT", "ITER_LIMIT", "ERROR"
 - `x` - Primal solution
 - `y` - Dual solution
+- `z` - Bound-dual solution
 - `primal_obj` - Primal objective value
 - `gap` - Duality gap
 - `residuals` - Final KKT residual

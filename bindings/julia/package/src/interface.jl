@@ -184,7 +184,7 @@ function solve(model::Model, params = nothing)
     
     # Adjust objective value by constant
     result = Results(
-        result.x, result.y, result.status,
+        result.x, result.y, result.z, result.status,
         result.primal_obj + model.obj_constant,
         result.gap, result.residuals, result.iter, result.time,
         result.iter4, result.iter6, result.iter8,
@@ -225,6 +225,7 @@ Solver configuration parameters.
 - `use_Ruiz_scaling::Bool`: Enable Ruiz equilibration scaling (default: true)
 - `use_Pock_Chambolle_scaling::Bool`: Enable Pock-Chambolle scaling (default: true)
 - `use_bc_scaling::Bool`: Enable bounds/cost scaling (default: true)
+- `use_presolve::Bool`: Enable embedded PSLP presolve/postsolve (default: true)
 
 # Example
 ```julia
@@ -248,6 +249,7 @@ mutable struct Parameters
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
+    use_presolve::Bool
     
     function Parameters(;
         max_iter::Int = Int(typemax(Int32)),
@@ -259,11 +261,12 @@ mutable struct Parameters
         autotune_verbose::Bool = false,
         use_Ruiz_scaling::Bool = true,
         use_Pock_Chambolle_scaling::Bool = true,
-        use_bc_scaling::Bool = true)
+        use_bc_scaling::Bool = true,
+        use_presolve::Bool = true)
         
         new(Int(max_iter), stop_tol, time_limit, Int(device_number), Int(check_iter),
             CUSPARSE_spmv, autotune_verbose,
-            use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling)
+            use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling, use_presolve)
     end
 end
 
@@ -282,6 +285,7 @@ function to_c_struct(params::Parameters)
     c_params.use_Ruiz_scaling = params.use_Ruiz_scaling
     c_params.use_Pock_Chambolle_scaling = params.use_Pock_Chambolle_scaling
     c_params.use_bc_scaling = params.use_bc_scaling
+    c_params.use_presolve = params.use_presolve
     
     return c_params
 end
@@ -294,6 +298,7 @@ Solution results from the solver.
 # Fields
 - `x::Vector{Float64}`: Primal solution
 - `y::Vector{Float64}`: Dual solution
+- `z::Vector{Float64}`: Bound-dual solution
 - `status::String`: Solution status ("OPTIMAL", "TIME_LIMIT", "ITER_LIMIT", etc.)
 - `primal_obj::Float64`: Primal objective value
 - `gap::Float64`: Duality gap
@@ -313,6 +318,7 @@ Solution results from the solver.
 struct Results
     x::Vector{Float64}
     y::Vector{Float64}
+    z::Vector{Float64}
     status::String
     primal_obj::Float64
     gap::Float64
@@ -334,6 +340,7 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
     # Copy solution vectors
     x = Vector{Float64}(undef, n)
     y = Vector{Float64}(undef, m)
+    z = Vector{Float64}(undef, n)
     
     if c_results.x != C_NULL
         unsafe_copyto!(pointer(x), c_results.x, n)
@@ -341,6 +348,10 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
     
     if c_results.y != C_NULL
         unsafe_copyto!(pointer(y), c_results.y, m)
+    end
+
+    if c_results.z != C_NULL
+        unsafe_copyto!(pointer(z), c_results.z, n)
     end
     
     # Get status string from char array
@@ -354,7 +365,7 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
     
     # Create Results object
     result = Results(
-        x, y, status,
+        x, y, z, status,
         c_results.primal_obj,
         c_results.gap,
         c_results.residuals,
@@ -369,7 +380,7 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
     )
     
     # Free C memory
-    c_free_results(c_results.x, c_results.y)
+    c_free_results(c_results.x, c_results.y, c_results.z)
     
     return result
 end

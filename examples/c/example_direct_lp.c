@@ -73,6 +73,7 @@ int main() {
     
     if (result.x) free(result.x);
     if (result.y) free(result.y);
+    if (result.z) free(result.z);
     free_model(model);
     
     return 0;

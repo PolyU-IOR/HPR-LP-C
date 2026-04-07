@@ -20,6 +20,7 @@ classdef Result
     %   iter        - Total number of iterations performed
     %   x           - Primal solution vector (n x 1)
     %   y           - Dual solution vector (m x 1)
+    %   z           - Bound-dual solution vector (n x 1)
     %
     % Example:
     %   result = hprlp.solve(A, AL, AU, l, u, c, param);
@@ -43,6 +44,7 @@ classdef Result
         iter        % Total iteration count
         x           % Primal solution vector
         y           % Dual solution vector
+        z           % Bound-dual solution vector
     end
     
     methods
@@ -67,6 +69,7 @@ classdef Result
                 obj.iter = result_struct.iter;
                 obj.x = result_struct.x;
                 obj.y = result_struct.y;
+                obj.z = result_struct.z;
             end
         end
         
@@ -94,6 +97,9 @@ classdef Result
             
             if ~isempty(obj.x)
                 fprintf('  Solution dim:  n=%d, m=%d\n', length(obj.x), length(obj.y));
+            end
+            if ~isempty(obj.z)
+                fprintf('  Bound dual dim: n=%d\n', length(obj.z));
             end
         end
         

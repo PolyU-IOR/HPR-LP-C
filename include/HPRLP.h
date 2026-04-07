@@ -150,7 +150,7 @@ LP_info_cpu* create_model_from_mps(const char* mps_file_path);
  * @return HPRLP_results structure containing solution and statistics
  * 
  * @note The model is not modified by this function
- * @note The caller must free result.x and result.y after use
+ * @note The caller must free result.x, result.y, and result.z after use
  * @note If param is NULL, default parameters are used
  * 
  * @code{.cpp}
@@ -169,8 +169,8 @@ LP_info_cpu* create_model_from_mps(const char* mps_file_path);
  * HPRLP_results result2 = solve(model, &param2);
  * 
  * // Cleanup
- * free(result1.x); free(result1.y);
- * free(result2.x); free(result2.y);
+ * free(result1.x); free(result1.y); free(result1.z);
+ * free(result2.x); free(result2.y); free(result2.z);
  * free_model(model);
  * @endcode
  * 
@@ -187,7 +187,7 @@ HPRLP_results solve(const LP_info_cpu *model, const HPRLP_parameters *param);
  * @param model Pointer to LP_info_cpu model to free, can be NULL (no-op)
  * 
  * @note This function is safe to call with NULL pointer
- * @note Does NOT free result.x and result.y from solve()
+ * @note Does NOT free result.x, result.y, or result.z from solve()
  * 
  * @code{.cpp}
  * LP_info_cpu* model = create_model_from_mps("problem.mps");

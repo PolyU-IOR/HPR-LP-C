@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "structs.h"
+#include <cstdlib>
 
 void set_vector_value_device(HPRLP_FLOAT *x, int n, HPRLP_FLOAT value){
     set_vector_value_device_kernel<<<numBlocks(n), numThreads>>>(x, n, value);
@@ -141,9 +142,10 @@ HPRLP_FLOAT time_since(std::chrono::steady_clock::time_point clock_begin) {
 
 void collect_solution(HPRLP_workspace_gpu *workspace, Scaling_info *scaling_info, HPRLP_results *output) {
     /*
-    Collect solution vectors (x and y) from GPU workspace to output structure.
-    This copies the primal solution x and dual solution y from device to host.
-    Applies inverse scaling: x = b_scale * (x_bar / col_norm), y = c_scale * (y_bar / row_norm)
+    Collect solution vectors (x, y, and z) from GPU workspace to output structure.
+    This copies the primal solution x, dual solution y, and bound-dual z from device to host.
+    Applies inverse scaling: x = b_scale * (x_bar / col_norm),
+    y = c_scale * (y_bar / row_norm), z = c_scale * (z_bar .* col_norm)
     
     Args:
         workspace: GPU workspace containing the solution vectors
@@ -157,13 +159,15 @@ void collect_solution(HPRLP_workspace_gpu *workspace, Scaling_info *scaling_info
     cudaGetLastError();
     
     // Allocate memory for the solution vectors on host
-    output->x = new HPRLP_FLOAT[n];
-    output->y = new HPRLP_FLOAT[m];
+    output->x = static_cast<HPRLP_FLOAT*>(std::malloc(n * sizeof(HPRLP_FLOAT)));
+    output->y = static_cast<HPRLP_FLOAT*>(std::malloc(m * sizeof(HPRLP_FLOAT)));
+    output->z = static_cast<HPRLP_FLOAT*>(std::malloc(n * sizeof(HPRLP_FLOAT)));
     
     // Allocate temporary device memory for scaled solutions
-    HPRLP_FLOAT *x_temp, *y_temp;
+    HPRLP_FLOAT *x_temp, *y_temp, *z_temp;
     cudaMalloc(&x_temp, n * sizeof(HPRLP_FLOAT));
     cudaMalloc(&y_temp, m * sizeof(HPRLP_FLOAT));
+    cudaMalloc(&z_temp, n * sizeof(HPRLP_FLOAT));
     
     // Apply inverse scaling on GPU:
     // Step 1: x_temp = x_bar / col_norm
@@ -178,13 +182,21 @@ void collect_solution(HPRLP_workspace_gpu *workspace, Scaling_info *scaling_info
     // Step 4: y_temp = c_scale * y_temp (in-place)
     cublasDscal(workspace->cublasHandle, m, &(scaling_info->c_scale), y_temp, 1);
     
+    // Step 5: z_temp = z_bar .* col_norm
+    vector_dot_product(workspace->z_bar, scaling_info->col_norm, z_temp, n, false);
+
+    // Step 6: z_temp = c_scale * z_temp (in-place)
+    cublasDscal(workspace->cublasHandle, n, &(scaling_info->c_scale), z_temp, 1);
+
     // Copy scaled solutions from device to host
     cudaMemcpy(output->x, x_temp, n * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost);
     cudaMemcpy(output->y, y_temp, m * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost);
+    cudaMemcpy(output->z, z_temp, n * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost);
     
     // Free temporary device memory
     cudaFree(x_temp);
     cudaFree(y_temp);
+    cudaFree(z_temp);
 }
 
 /* CSR Matrix transpose (host utility) */

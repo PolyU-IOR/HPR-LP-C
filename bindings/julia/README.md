@@ -129,6 +129,7 @@ Solver configuration options (specified as keyword arguments):
 | `use_Ruiz_scaling` | Apply Ruiz scaling | `true` |
 | `use_Pock_Chambolle_scaling` | Apply Pock–Chambolle scaling | `true` |
 | `use_bc_scaling` | Apply bounds/cost scaling | `true` |
+| `use_presolve` | Apply embedded PSLP presolve/postsolve in the C core | `true` |
 
 ---
 
@@ -140,6 +141,7 @@ The `Results` object contains solution and performance information after solving
 | `status` | Solver status: `"OPTIMAL"`, `"TIME_LIMIT"`, `"ITER_LIMIT"`, `"ERROR"` |
 | `x` | Primal solution |
 | `y` | Dual solution |
+| `z` | Bound-dual solution |
 | `primal_obj` | Primal objective value |
 | `gap` | Duality gap |
 | `residuals` | Final KKT residual |

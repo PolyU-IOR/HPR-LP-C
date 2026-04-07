@@ -99,6 +99,7 @@ mutable struct C_HPRLP_parameters
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
+    use_presolve::Bool
     
     function C_HPRLP_parameters()
         new(
@@ -111,7 +112,8 @@ mutable struct C_HPRLP_parameters
             false,           # autotune_verbose
             true,            # use_Ruiz_scaling
             true,            # use_Pock_Chambolle_scaling
-            true             # use_bc_scaling
+            true,            # use_bc_scaling
+            true             # use_presolve
         )
     end
 end
@@ -137,6 +139,7 @@ mutable struct C_HPRLP_results
     status::NTuple{64, UInt8}  # C char array[64]
     x::Ptr{Float64}            # Primal solution array
     y::Ptr{Float64}            # Dual solution array
+    z::Ptr{Float64}            # Bound-dual solution array
 end
 
 """
@@ -220,12 +223,15 @@ Free memory allocated by C library for solution vectors.
 Note: This uses the system free() function which is compatible
 with the malloc() used in the C library.
 """
-function c_free_results(x_ptr::Ptr{Float64}, y_ptr::Ptr{Float64})
+function c_free_results(x_ptr::Ptr{Float64}, y_ptr::Ptr{Float64}, z_ptr::Ptr{Float64})
     if x_ptr != C_NULL
         # Use system free() which matches malloc() in C library
         ccall(:free, Cvoid, (Ptr{Float64},), x_ptr)
     end
     if y_ptr != C_NULL
         ccall(:free, Cvoid, (Ptr{Float64},), y_ptr)
+    end
+    if z_ptr != C_NULL
+        ccall(:free, Cvoid, (Ptr{Float64},), z_ptr)
     end
 end

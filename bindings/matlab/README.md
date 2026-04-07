@@ -140,6 +140,7 @@ Solver configuration:
 - `use_Ruiz_scaling` - Ruiz scaling (default: true)
 - `use_Pock_Chambolle_scaling` - Pock-Chambolle scaling (default: true)
 - `use_bc_scaling` - Bounds/cost scaling (default: true)
+- `use_presolve` - Embedded PSLP presolve/postsolve in the C core (default: true)
 
 **Example:**
 ```matlab
@@ -154,6 +155,7 @@ Solution information:
 - `status` - "OPTIMAL", "TIME_LIMIT", "ITER_LIMIT", "ERROR"
 - `x` - Primal solution (n×1 vector)
 - `y` - Dual solution (m×1 vector)
+- `z` - Bound-dual solution (n×1 vector)
 - `primal_obj` - Primal objective value
 - `gap` - Duality gap
 - `residuals` - Final KKT residual

@@ -1,7 +1,9 @@
 #include "HPRLP.h"
+#include "pslp_integration.h"
 #include "version.h"
 #include "mps_reader.h"
 #include <cuda_runtime.h>
+#include <cstring>
 #include <iostream>
 #include <iomanip>
 #include <fstream>
@@ -34,6 +36,7 @@ static void print_parameters(const HPRLP_parameters *param) {
     std::cout << "  Check Interval:      " << param->check_iter << " iterations\n";
     std::cout << "  cuSPARSE Only:       " << (param->CUSPARSE_spmv ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Autotune Verbose:    " << (param->autotune_verbose ? "Enabled" : "Disabled") << "\n";
+    std::cout << "  PSLP Presolve:       " << (param->use_presolve ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Scaling:\n";
     std::cout << "    - Ruiz:            " << (param->use_Ruiz_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Pock-Chambolle:  " << (param->use_Pock_Chambolle_scaling ? "Enabled" : "Disabled") << "\n";
@@ -57,6 +60,21 @@ static int initialize_device(int device_id) {
     
     // std::cout << "[info] Using CUDA device " << device_id << std::endl;
     return 0;
+}
+
+static HPRLP_results make_error_result(const char *status) {
+    HPRLP_results result;
+    std::strncpy(result.status, status, sizeof(result.status) - 1);
+    result.status[sizeof(result.status) - 1] = '\0';
+    result.iter = 0;
+    result.time = 0.0;
+    result.primal_obj = 0.0;
+    result.residuals = 0.0;
+    result.gap = 0.0;
+    result.x = nullptr;
+    result.y = nullptr;
+    result.z = nullptr;
+    return result;
 }
 
 static double compute_maximum_eigenvalue(HPRLP_workspace_gpu *ws, const HPRLP_parameters *params) {
@@ -468,25 +486,33 @@ HPRLP_results solve(const LP_info_cpu *model, const HPRLP_parameters *param) {
     // Validate input
     if (!model) {
         std::cerr << "[error] Null model pointer" << std::endl;
-        HPRLP_results error_result;
-        strncpy(error_result.status, "ERROR", sizeof(error_result.status) - 1);
-        error_result.status[sizeof(error_result.status) - 1] = '\0';
-        error_result.iter = 0;
-        error_result.time = 0.0;
-        error_result.primal_obj = 0.0;
-        error_result.residuals = 0.0;
-        error_result.gap = 0.0;
-        error_result.x = nullptr;
-        error_result.y = nullptr;
-        return error_result;
+        return make_error_result("ERROR");
     }
     
     // Use default parameters if param is NULL
     HPRLP_parameters default_param;
     const HPRLP_parameters *actual_param = param ? param : &default_param;
     
-    // Solve the LP problem
-    return HPRLP_main_solve(model, actual_param);
+    if (!actual_param->use_presolve) {
+        return HPRLP_main_solve(model, actual_param);
+    }
+
+    LP_info_cpu reduced_model{};
+    void *presolver_handle = nullptr;
+    const bool presolve_ok = run_embedded_pslp_presolve(model, actual_param, &reduced_model, &presolver_handle);
+    const LP_info_cpu *solve_model = presolve_ok ? &reduced_model : model;
+
+    HPRLP_results result = HPRLP_main_solve(solve_model, actual_param);
+
+    if (presolve_ok) {
+        if (result.x && result.y && result.z) {
+            postsolve_and_validate_original_kkt(&result, model, presolver_handle, actual_param);
+        }
+        free_embedded_pslp_presolver(presolver_handle);
+        free_lp_info_cpu(&reduced_model);
+    }
+
+    return result;
 }
 
 /**

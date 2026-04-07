@@ -15,6 +15,7 @@ classdef Parameters
     %   use_Ruiz_scaling          - Use Ruiz scaling (default: true)
     %   use_Pock_Chambolle_scaling - Use Pock-Chambolle scaling (default: true)
     %   use_bc_scaling            - Use bound constraint scaling (default: true)
+    %   use_presolve              - Enable embedded PSLP presolve/postsolve (default: true)
     %
     % Example:
     %   param = hprlp.Parameters();
@@ -34,6 +35,7 @@ classdef Parameters
         use_Ruiz_scaling          = true        % Use Ruiz scaling
         use_Pock_Chambolle_scaling = true       % Use Pock-Chambolle scaling
         use_bc_scaling            = true        % Use bound constraint scaling
+        use_presolve              = true        % Enable embedded PSLP presolve/postsolve
     end
     
     methods
@@ -60,6 +62,7 @@ classdef Parameters
             s.use_Ruiz_scaling = obj.use_Ruiz_scaling;
             s.use_Pock_Chambolle_scaling = obj.use_Pock_Chambolle_scaling;
             s.use_bc_scaling = obj.use_bc_scaling;
+            s.use_presolve = obj.use_presolve;
         end
         
         function disp(obj)
@@ -76,6 +79,7 @@ classdef Parameters
             fprintf('  use_Ruiz_scaling:           %d\n', obj.use_Ruiz_scaling);
             fprintf('  use_Pock_Chambolle_scaling: %d\n', obj.use_Pock_Chambolle_scaling);
             fprintf('  use_bc_scaling:             %d\n', obj.use_bc_scaling);
+            fprintf('  use_presolve:               %d\n', obj.use_presolve);
         end
     end
 end

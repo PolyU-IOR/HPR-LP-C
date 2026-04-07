@@ -9,6 +9,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include <cstdlib>
 #include <vector>
 #include <cmath>
 #include <limits>
@@ -35,6 +36,7 @@ public:
     bool use_Ruiz_scaling;
     bool use_Pock_Chambolle_scaling;
     bool use_bc_scaling;
+    bool use_presolve;
 
     PyParameter() 
         : max_iter(INT32_MAX),
@@ -46,7 +48,8 @@ public:
           autotune_verbose(false),
           use_Ruiz_scaling(true),
           use_Pock_Chambolle_scaling(true),
-          use_bc_scaling(true) {}
+          use_bc_scaling(true),
+          use_presolve(true) {}
 
     // Convert to C Parameter struct
     HPRLP_parameters to_c_struct() const {
@@ -61,6 +64,7 @@ public:
         param.use_Ruiz_scaling = use_Ruiz_scaling;
         param.use_Pock_Chambolle_scaling = use_Pock_Chambolle_scaling;
         param.use_bc_scaling = use_bc_scaling;
+        param.use_presolve = use_presolve;
         return param;
     }
 };
@@ -84,6 +88,7 @@ public:
     std::string status;
     std::vector<double> x;  // Primal solution
     std::vector<double> y;  // Dual solution
+    std::vector<double> z;  // Bound-dual solution
 
     PyResults() 
         : residuals(0), primal_obj(0), gap(0),
@@ -114,6 +119,9 @@ public:
         if (result.y != nullptr) {
             py_result.y = std::vector<double>(result.y, result.y + m);
         }
+        if (result.z != nullptr) {
+            py_result.z = std::vector<double>(result.z, result.z + n);
+        }
 
         return py_result;
     }
@@ -134,6 +142,7 @@ public:
         d["status"] = status;
         d["x"] = x;
         d["y"] = y;
+        d["z"] = z;
         return d;
     }
 };
@@ -291,6 +300,9 @@ PyResults solve_model_py(const PyModel& py_model, const PyParameter* py_param_pt
     if (result.y != nullptr) {
         free(result.y);
     }
+    if (result.z != nullptr) {
+        free(result.z);
+    }
 
     return py_result;
 }
@@ -334,6 +346,8 @@ PYBIND11_MODULE(_hprlp_core, m) {
                       "Use Pock-Chambolle scaling (default: True)")
         .def_readwrite("use_bc_scaling", &PyParameter::use_bc_scaling,
                       "Use bound constraint scaling (default: True)")
+        .def_readwrite("use_presolve", &PyParameter::use_presolve,
+                      "Enable embedded PSLP presolve/postsolve (default: True)")
         .def("__repr__", [](const PyParameter &p) {
             return "<HPRLP.Parameters max_iter=" + std::to_string(p.max_iter) +
                    " stop_tol=" + std::to_string(p.stop_tol) + ">";
@@ -356,6 +370,7 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readonly("status", &PyResults::status, "Solver status")
         .def_readonly("x", &PyResults::x, "Primal solution vector")
         .def_readonly("y", &PyResults::y, "Dual solution vector")
+        .def_readonly("z", &PyResults::z, "Bound-dual solution vector")
         .def("to_dict", &PyResults::to_dict, "Convert results to dictionary")
         .def("__repr__", [](const PyResults &r) {
             return "<HPRLP.Results status='" + r.status + 

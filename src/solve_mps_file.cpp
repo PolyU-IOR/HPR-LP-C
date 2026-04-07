@@ -25,6 +25,7 @@ static void print_usage(const char* prog) {
               << "      --ruiz <true/false>    Enable/disable Ruiz scaling (default: true)\n"
               << "      --pock <true/false>    Enable/disable Pock-Chambolle scaling (default: true)\n"
               << "      --bc <true/false>      Enable/disable bounds/cost scaling (default: true)\n"
+              << "      --presolve <true/false>  Enable/disable embedded PSLP presolve (default: true)\n"
               << "  -h, --help                 Show this help and exit\n"
               << "\nExample:\n  " << prog << " -i model.mps --device 0 --time-limit 3600 --tol 1e-4\n";
 }
@@ -87,6 +88,10 @@ int main(int argc, char** argv) {
             need_value(a);
             std::string val = argv[++i];
             param.use_bc_scaling = (val == "true" || val == "1");
+        } else if (std::strcmp(a, "--presolve") == 0) {
+            need_value(a);
+            std::string val = argv[++i];
+            param.use_presolve = (val == "true" || val == "1");
         } else {
             std::cerr << "Unknown option: " << a << "\n";
             print_usage(argv[0]);
@@ -107,10 +112,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    LP_info_cpu lp_info;
-    build_model_from_mps(input_path.c_str(), &lp_info);
+    LP_info_cpu* model = create_model_from_mps(input_path.c_str());
+    if (!model) {
+        std::cerr << "Failed to load model from MPS file: " << input_path << "\n";
+        return 1;
+    }
 
-    HPRLP_results output = HPRLP_main_solve(&lp_info, &param);
+    HPRLP_results output = solve(model, &param);
+
+    if (output.x) free(output.x);
+    if (output.y) free(output.y);
+    if (output.z) free(output.z);
+    free_model(model);
     
     return 0;
 }

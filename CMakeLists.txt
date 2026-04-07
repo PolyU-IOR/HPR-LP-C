@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(HPRLP VERSION 0.1.1 LANGUAGES CXX CUDA)
+project(HPRLP VERSION 0.1.1 LANGUAGES C CXX CUDA)
 
 # Set C++ and CUDA standards (C++11 for better compatibility with MATLAB and older systems)
 set(CMAKE_CXX_STANDARD 11)
@@ -89,8 +89,31 @@ include_directories(
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
+set(PSLP_DIR ${PROJECT_SOURCE_DIR}/third_party/PSLP)
+file(GLOB PSLP_SOURCES CONFIGURE_DEPENDS
+    ${PSLP_DIR}/src/core/*.c
+    ${PSLP_DIR}/src/explorers/*.c
+)
+list(REMOVE_ITEM PSLP_SOURCES ${PSLP_DIR}/src/core/Debugger.c)
+
+add_library(pslp_embedded OBJECT ${PSLP_SOURCES})
+target_include_directories(pslp_embedded BEFORE
+    PRIVATE
+        ${PSLP_DIR}/include/PSLP
+        ${PSLP_DIR}/include/core
+        ${PSLP_DIR}/include/data_structures
+        ${PSLP_DIR}/include/explorers
+)
+target_compile_definitions(pslp_embedded PRIVATE PSLP_VERSION="0.0.8" NDEBUG)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(pslp_embedded PRIVATE _POSIX_C_SOURCE=200809L)
+endif()
+target_compile_options(pslp_embedded PRIVATE -w -O3)
+set_target_properties(pslp_embedded PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # Source files for the library
 set(HPRLP_LIB_SOURCES
+    src/pslp_integration.cpp
     src/mps_reader.cpp
     src/utils.cu
     src/scaling.cu
@@ -104,6 +127,7 @@ set(HPRLP_LIB_SOURCES
 # Create static library (default)
 if(BUILD_STATIC_LIB)
     add_library(hprlp_static STATIC ${HPRLP_LIB_SOURCES})
+    target_sources(hprlp_static PRIVATE $<TARGET_OBJECTS:pslp_embedded>)
     
     # Link CUDA libraries
     target_link_libraries(hprlp_static
@@ -128,12 +152,18 @@ if(BUILD_STATIC_LIB)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${PSLP_DIR}/include/PSLP
+            ${PSLP_DIR}/include/core
+            ${PSLP_DIR}/include/data_structures
+            ${PSLP_DIR}/include/explorers
     )
 endif()
 
 # Create shared library (for language bindings: Python, Julia, MATLAB, etc.)
 if(BUILD_SHARED_LIB)
     add_library(hprlp_shared SHARED ${HPRLP_LIB_SOURCES})
+    target_sources(hprlp_shared PRIVATE $<TARGET_OBJECTS:pslp_embedded>)
     
     # Link CUDA libraries
     target_link_libraries(hprlp_shared
@@ -165,6 +195,11 @@ if(BUILD_SHARED_LIB)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
+        PRIVATE
+            ${PSLP_DIR}/include/PSLP
+            ${PSLP_DIR}/include/core
+            ${PSLP_DIR}/include/data_structures
+            ${PSLP_DIR}/include/explorers
     )
 endif()
 

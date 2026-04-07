@@ -17,6 +17,8 @@ class Results:
         Primal solution vector
     y : np.ndarray
         Dual solution vector
+    z : np.ndarray
+        Bound-dual solution vector
     primal_obj : float
         Primal objective value (c'*x)
     gap : float
@@ -52,6 +54,7 @@ class Results:
         self.status: str = "UNKNOWN"
         self.x: Optional[np.ndarray] = None
         self.y: Optional[np.ndarray] = None
+        self.z: Optional[np.ndarray] = None
         self.primal_obj: float = 0.0
         self.gap: float = float('inf')
         self.residuals: float = float('inf')
@@ -109,6 +112,8 @@ class Results:
         
         if self.y is not None:
             lines.append(f"Constraints:     {len(self.y)}")
+        if self.z is not None:
+            lines.append(f"Bound duals:     {len(self.z)}")
         
         return "\n".join(lines)
     
@@ -118,6 +123,7 @@ class Results:
             'status': self.status,
             'x': self.x.tolist() if self.x is not None else None,
             'y': self.y.tolist() if self.y is not None else None,
+            'z': self.z.tolist() if self.z is not None else None,
             'primal_obj': self.primal_obj,
             'gap': self.gap,
             'residuals': self.residuals,
@@ -153,6 +159,8 @@ class Results:
             results.x = np.array(core_results.x, dtype=np.float64)
         if hasattr(core_results, 'y') and len(core_results.y) > 0:
             results.y = np.array(core_results.y, dtype=np.float64)
+        if hasattr(core_results, 'z') and len(core_results.z) > 0:
+            results.z = np.array(core_results.z, dtype=np.float64)
         
         return results
     
@@ -161,7 +169,7 @@ class Results:
         """Create Results from dictionary"""
         results = cls()
         for key, value in d.items():
-            if key in ['x', 'y'] and value is not None:
+            if key in ['x', 'y', 'z'] and value is not None:
                 setattr(results, key, np.array(value, dtype=np.float64))
             elif hasattr(results, key):
                 setattr(results, key, value)
