@@ -1,5 +1,68 @@
 #include "preprocess.h"
 
+namespace {
+
+constexpr HPRLP_FLOAT kInfiniteBoundThreshold = 1e90;
+constexpr int kShortRowMaxNnz = 16;
+
+void copy_int_vector_to_device(const std::vector<int> &host_values, int **device_values) {
+    if (host_values.empty()) {
+        *device_values = nullptr;
+        return;
+    }
+    CUDA_CHECK(cudaMalloc(device_values, static_cast<int>(host_values.size()) * sizeof(int)));
+    CUDA_CHECK(cudaMemcpy(*device_values, host_values.data(), static_cast<int>(host_values.size()) * sizeof(int), cudaMemcpyHostToDevice));
+}
+
+void build_row_buckets(const sparseMatrix *matrix, int **rows_short, int *num_rows_short, int **rows_medium, int *num_rows_medium) {
+    std::vector<int> row_ptr(matrix->row + 1);
+    CUDA_CHECK(cudaMemcpy(row_ptr.data(), matrix->rowPtr, (matrix->row + 1) * sizeof(int), cudaMemcpyDeviceToHost));
+
+    std::vector<int> short_rows;
+    std::vector<int> medium_rows;
+    short_rows.reserve(matrix->row);
+    medium_rows.reserve(matrix->row / 2);
+
+    for (int row = 0; row < matrix->row; ++row) {
+        int nnz = row_ptr[row + 1] - row_ptr[row];
+        if (nnz <= kShortRowMaxNnz) {
+            short_rows.push_back(row);
+        } else {
+            medium_rows.push_back(row);
+        }
+    }
+
+    *num_rows_short = static_cast<int>(short_rows.size());
+    *num_rows_medium = static_cast<int>(medium_rows.size());
+    copy_int_vector_to_device(short_rows, rows_short);
+    copy_int_vector_to_device(medium_rows, rows_medium);
+}
+
+void build_bound_types(const HPRLP_FLOAT *lower_dev, const HPRLP_FLOAT *upper_dev, int len, uint8_t **bound_type_dev) {
+    std::vector<HPRLP_FLOAT> lower(len);
+    std::vector<HPRLP_FLOAT> upper(len);
+    std::vector<uint8_t> bound_type(len);
+    CUDA_CHECK(cudaMemcpy(lower.data(), lower_dev, len * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(upper.data(), upper_dev, len * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < len; ++i) {
+        if (lower[i] <= -kInfiniteBoundThreshold && upper[i] >= kInfiniteBoundThreshold) {
+            bound_type[i] = 0;
+        } else if (upper[i] >= kInfiniteBoundThreshold) {
+            bound_type[i] = 1;
+        } else if (lower[i] <= -kInfiniteBoundThreshold) {
+            bound_type[i] = 2;
+        } else {
+            bound_type[i] = 3;
+        }
+    }
+
+    CUDA_CHECK(cudaMalloc(bound_type_dev, len * sizeof(uint8_t)));
+    CUDA_CHECK(cudaMemcpy(*bound_type_dev, bound_type.data(), len * sizeof(uint8_t), cudaMemcpyHostToDevice));
+}
+
+}
+
 void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu) {
     int m = lp_info_cpu->m;
     int n = lp_info_cpu->n;
@@ -106,14 +169,27 @@ void prepare_spmv(HPRLP_workspace_gpu *workspace) {
 }
 
 
-void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
+void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu, const HPRLP_parameters *param) {
     // allocate memory for the workspace
     int m = workspace->m;
     int n = workspace->n;
     cudaStreamCreate(&workspace->stream);
 
-    cudaMalloc((void**)&workspace->Halpern_params, 2 * sizeof(HPRLP_FLOAT));   // For Halpern iteration parameters
-    cudaMemset(workspace->Halpern_params, 0, 2 * sizeof(HPRLP_FLOAT));
+    CUDA_CHECK(cudaMalloc((void**)&workspace->Halpern_params, 4 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMemset(workspace->Halpern_params, 0, 4 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMalloc((void**)&workspace->halpern_inner, sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void**)&workspace->halpern_factors, 2 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMallocHost(&workspace->iter_params_host, 4 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMallocHost(&workspace->halpern_inner_host, sizeof(int)));
+    CUDA_CHECK(cudaMallocHost(&workspace->halpern_factors_host, 2 * sizeof(HPRLP_FLOAT)));
+    workspace->halpern_inner_host[0] = 0;
+    workspace->halpern_factors_host[0] = 0.5;
+    workspace->halpern_factors_host[1] = 0.5;
+    memset(workspace->iter_params_host, 0, 4 * sizeof(HPRLP_FLOAT));
+    CUDA_CHECK(cudaMemcpyAsync(workspace->halpern_inner, workspace->halpern_inner_host, sizeof(int),
+                               cudaMemcpyHostToDevice, workspace->stream));
+    CUDA_CHECK(cudaMemcpyAsync(workspace->halpern_factors, workspace->halpern_factors_host, 2 * sizeof(HPRLP_FLOAT),
+                               cudaMemcpyHostToDevice, workspace->stream));
 
     create_zero_vector_device(workspace->x, n);
     create_zero_vector_device(workspace->last_x, n);
@@ -146,13 +222,36 @@ void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
     workspace->graph = nullptr;  // Initialize CUDA Graph pointer
     workspace->graph_exec = nullptr;
     workspace->graph_initialized = false;
+    workspace->use_custom_fused_x = false;
+    workspace->use_custom_fused_y = false;
 
     cublasCreate(&workspace->cublasHandle);
     cublasSetStream(workspace->cublasHandle, workspace->stream);
+
+    // device-mode CUBLAS handle for queued (async) reductions
+    cublasCreate(&workspace->cublasHandle_device);
+    cublasSetStream(workspace->cublasHandle_device, workspace->stream);
+    cublasSetPointerMode(workspace->cublasHandle_device, CUBLAS_POINTER_MODE_DEVICE);
+
+    // 10-slot reduction scalar staging buffers
+    CUDA_CHECK(cudaMalloc(&workspace->reduction_scalars, 10 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMemset(workspace->reduction_scalars, 0, 10 * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(cudaMallocHost(&workspace->reduction_scalars_host, 10 * sizeof(HPRLP_FLOAT)));
+    memset(workspace->reduction_scalars_host, 0, 10 * sizeof(HPRLP_FLOAT));
+
     prepare_spmv(workspace);
     cusparseSetStream(workspace->spmv_A->cusparseHandle, workspace->stream);
     if (workspace->spmv_AT->cusparseHandle != workspace->spmv_A->cusparseHandle) {
          cusparseSetStream(workspace->spmv_AT->cusparseHandle, workspace->stream);
+    }
+
+    if (!param->CUSPARSE_spmv) {
+        build_bound_types(workspace->l, workspace->u, n, &workspace->x_bound_type);
+        build_bound_types(workspace->AL, workspace->AU, m, &workspace->y_bound_type);
+        build_row_buckets(workspace->A, &workspace->A_rows_short, &workspace->num_A_rows_short,
+                          &workspace->A_rows_medium, &workspace->num_A_rows_medium);
+        build_row_buckets(workspace->AT, &workspace->AT_rows_short, &workspace->num_AT_rows_short,
+                          &workspace->AT_rows_medium, &workspace->num_AT_rows_medium);
     }
 }
 
@@ -166,10 +265,24 @@ void free_workspace(HPRLP_workspace_gpu *workspace) {
      */
     if (!workspace) return;
     
-    // Destroy cuBLAS handle FIRST (before freeing vectors it might reference)
+    // Destroy cuBLAS handles FIRST (before freeing vectors they might reference)
+    if (workspace->cublasHandle_device) {
+        cublasDestroy(workspace->cublasHandle_device);
+        workspace->cublasHandle_device = nullptr;
+    }
     if (workspace->cublasHandle) {
         cublasDestroy(workspace->cublasHandle);
         workspace->cublasHandle = nullptr;
+    }
+
+    // Free reduction scalar staging buffers
+    if (workspace->reduction_scalars) {
+        cudaFree(workspace->reduction_scalars);
+        workspace->reduction_scalars = nullptr;
+    }
+    if (workspace->reduction_scalars_host) {
+        cudaFreeHost(workspace->reduction_scalars_host);
+        workspace->reduction_scalars_host = nullptr;
     }
     
     // Destroy CUSPARSE descriptors BEFORE freeing the underlying memory
@@ -211,11 +324,38 @@ void free_workspace(HPRLP_workspace_gpu *workspace) {
         workspace->graph = nullptr;
     }
 
-    // Free Halpern parameters memory
+    // Free Halpern runtime parameter buffers
     if (workspace->Halpern_params) {
         cudaFree(workspace->Halpern_params);
         workspace->Halpern_params = nullptr;
     }
+    if (workspace->halpern_inner) {
+        cudaFree(workspace->halpern_inner);
+        workspace->halpern_inner = nullptr;
+    }
+    if (workspace->halpern_factors) {
+        cudaFree(workspace->halpern_factors);
+        workspace->halpern_factors = nullptr;
+    }
+    if (workspace->iter_params_host) {
+        cudaFreeHost(workspace->iter_params_host);
+        workspace->iter_params_host = nullptr;
+    }
+    if (workspace->halpern_inner_host) {
+        cudaFreeHost(workspace->halpern_inner_host);
+        workspace->halpern_inner_host = nullptr;
+    }
+    if (workspace->halpern_factors_host) {
+        cudaFreeHost(workspace->halpern_factors_host);
+        workspace->halpern_factors_host = nullptr;
+    }
+
+    if (workspace->x_bound_type) cudaFree(workspace->x_bound_type);
+    if (workspace->y_bound_type) cudaFree(workspace->y_bound_type);
+    if (workspace->A_rows_short) cudaFree(workspace->A_rows_short);
+    if (workspace->A_rows_medium) cudaFree(workspace->A_rows_medium);
+    if (workspace->AT_rows_short) cudaFree(workspace->AT_rows_short);
+    if (workspace->AT_rows_medium) cudaFree(workspace->AT_rows_medium);
     
     // NOW free device vectors (after descriptors are destroyed)
     if (workspace->x) cudaFree(workspace->x);

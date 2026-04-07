@@ -20,6 +20,8 @@ static void print_usage(const char* prog) {
               << "      --tol <eps>            Stopping tolerance (default: 1e-4)\n"
               << "      --time-limit <sec>     Time limit in seconds (default: 3600)\n"
               << "      --check-iter <N>       Check interval (default: 150)\n"
+              << "      --cusparse-spmv <true/false>  Force cuSPARSE-only normal updates (default: false)\n"
+              << "      --autotune-verbose <true/false>  Print fused backend autotune results (default: false)\n"
               << "      --ruiz <true/false>    Enable/disable Ruiz scaling (default: true)\n"
               << "      --pock <true/false>    Enable/disable Pock-Chambolle scaling (default: true)\n"
               << "      --bc <true/false>      Enable/disable bounds/cost scaling (default: true)\n"
@@ -65,6 +67,14 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(a, "--check-iter") == 0) {
             need_value(a);
             param.check_iter = std::stoi(argv[++i]);
+        } else if (std::strcmp(a, "--cusparse-spmv") == 0) {
+            need_value(a);
+            std::string val = argv[++i];
+            param.CUSPARSE_spmv = (val == "true" || val == "1");
+        } else if (std::strcmp(a, "--autotune-verbose") == 0) {
+            need_value(a);
+            std::string val = argv[++i];
+            param.autotune_verbose = (val == "true" || val == "1");
         } else if (std::strcmp(a, "--ruiz") == 0) {
             need_value(a);
             std::string val = argv[++i];

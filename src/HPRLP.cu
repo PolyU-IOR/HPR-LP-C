@@ -32,6 +32,8 @@ static void print_parameters(const HPRLP_parameters *param) {
     std::cout << "  Stopping Tolerance:  " << std::scientific << std::setprecision(1) << param->stop_tol << "\n" << std::defaultfloat;
     std::cout << "  Time Limit:          " << std::fixed << std::setprecision(1) << param->time_limit << " seconds\n" << std::defaultfloat;
     std::cout << "  Check Interval:      " << param->check_iter << " iterations\n";
+    std::cout << "  cuSPARSE Only:       " << (param->CUSPARSE_spmv ? "Enabled" : "Disabled") << "\n";
+    std::cout << "  Autotune Verbose:    " << (param->autotune_verbose ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Scaling:\n";
     std::cout << "    - Ruiz:            " << (param->use_Ruiz_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Pock-Chambolle:  " << (param->use_Pock_Chambolle_scaling ? "Enabled" : "Disabled") << "\n";
@@ -112,7 +114,7 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     HPRLP_workspace_gpu workspace;
     workspace.m = lp_info_cpu->m;
     workspace.n = lp_info_cpu->n;
-    allocate_memory(&workspace, &lp_info_gpu);
+    allocate_memory(&workspace, &lp_info_gpu, param);
 
     // Scaling part: 1.Ruiz_Scaling, 2.PC_Scaling, 3.bc_scaling
     Scaling_info scaling_info;
@@ -136,6 +138,10 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     restart_info.restart_flag = 0;
     restart_info.first_restart = true;
 
+    reset_halpern_runtime_params(&workspace);
+
+    autotune_custom_update_backends(&workspace, &lp_info_gpu, &scaling_info, param);
+
     HPRLP_results output;
     bool first_4 = true;
     bool first_6 = true;
@@ -145,12 +151,17 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
 
     for (int iter = 0 ; iter < param->max_iter ; iter ++) {
 
+        bool periodic_check = (iter % param->check_iter == 0);
+        // Batch the restart-gap computation with the residual fetch (iter > 0 only).
+        bool compute_gap = (periodic_check && iter > 0);
+
         bool print_flag = ((iter % step(iter) == 0) ||                
                             (iter == param->max_iter) ||                    // reach maximum allowed iterations
                             time_since(t_start_alg) > param->time_limit);   // reach maximum run time
 
-        if (iter % param->check_iter == 0 || print_flag) {
-            collect_residuals(&workspace, &lp_info_gpu, &scaling_info, &residuals, iter);    // KKT residuals computation
+        if (periodic_check || print_flag) {
+            collect_residuals(&workspace, &lp_info_gpu, &scaling_info, &residuals, iter,
+                              &restart_info, compute_gap);    // KKT residuals + optional gap
             residuals.is_updated = true;
         } 
         else {
@@ -160,8 +171,12 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
         // check stopping criterion
         std::string status = check_stopping(&residuals, iter, t_start_alg, param);
 
-        // check restart
-        check_restart(&restart_info, iter, param->check_iter, workspace.sigma);
+        // check restart (only at periodic checkpoints)
+        if (periodic_check) {
+            check_restart(&restart_info, iter, param->check_iter, workspace.sigma);
+        } else {
+            restart_info.restart_flag = 0;
+        }
 
         if (print_flag || status != "CONTINUE") {
             std::cout << std::setw(5) << iter << "    "
@@ -243,15 +258,12 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
 
         do_restart(&workspace, &restart_info);
 
-        if (iter == 0 || restart_info.restart_flag > 0) {
+        upload_halpern_iter_params_if_needed(&workspace);
+        upload_halpern_restart_params(&workspace, &restart_info);
+
+        if (!workspace.graph_initialized) {
             rebuild_cuda_graph(&workspace);
         }
-
-        HPRLP_FLOAT h_f1 = 1.0 / (restart_info.inner + 2.0);
-        HPRLP_FLOAT h_f2 = 1.0 - h_f1;
-        HPRLP_FLOAT h_params[2] = {h_f1, h_f2};
-        CUDA_CHECK(cudaMemcpyAsync(workspace.Halpern_params, h_params, 2*sizeof(HPRLP_FLOAT),
-                           cudaMemcpyHostToDevice, workspace.stream));
 
 
         workspace.check = ((iter + 1) % param->check_iter == 0 || restart_info.restart_flag > 0);
@@ -264,11 +276,7 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
             cudaGraphLaunch(workspace.graph_exec, workspace.stream);
         }
 
-        if ((iter + 1) % param->check_iter == 0) {
-            restart_info.current_gap = compute_weighted_norm(&workspace);
-        }
-
-        if(restart_info.restart_flag > 0) {
+        if (restart_info.restart_flag > 0) {
             restart_info.last_gap = compute_weighted_norm(&workspace);
         }
 

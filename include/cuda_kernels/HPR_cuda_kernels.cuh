@@ -57,23 +57,61 @@ void residual_compute_lu_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *x_temp, HPRL
 __global__
 void residual_compute_Rd_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *ATy, HPRLP_FLOAT *z, HPRLP_FLOAT *c, HPRLP_FLOAT *Rd, int n);
 
+__global__
+void advance_halpern_factors_kernel(int *halpern_inner, HPRLP_FLOAT *halpern_factors);
+
 
 // X update kernels
 __global__ 
 void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
-                        HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n);
+                        HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
+                        const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n);
 
 __global__
-void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy,
-                            HPRLP_FLOAT *c, HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n);
+void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT *ATy,
+                            HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
+                            const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n);
 
 // Y update kernels
 __global__ 
-void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2,
-                        HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m);
+void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
+                        HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params,
+                        const HPRLP_FLOAT *halpern_factors, int m);
 
 __global__ 
-void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m);
+void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
+                            HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params,
+                            const HPRLP_FLOAT *halpern_factors, int m);
+
+__global__
+void fused_update_x_z_rows_short_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+                                        const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
+                                        const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
+                                        const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
+                                        const HPRLP_FLOAT *halpern_factors,
+                                        const int *row_ids, int nrows);
+
+__global__
+void fused_update_x_z_rows_warp_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+                                       const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
+                                       const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
+                                       const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
+                                       const HPRLP_FLOAT *halpern_factors,
+                                       const int *row_ids, int nrows);
+
+__global__
+void fused_update_y_rows_short_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+                                      const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
+                                      const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
+                                      const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
+                                      const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows);
+
+__global__
+void fused_update_y_rows_warp_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+                                     const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
+                                     const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
+                                     const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
+                                     const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows);
 
 
 #endif

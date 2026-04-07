@@ -6,7 +6,7 @@
 
 void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu);
 
-void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu);
+void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu, const HPRLP_parameters *param);
 
 void free_workspace(HPRLP_workspace_gpu *workspace);
 

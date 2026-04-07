@@ -1,5 +1,35 @@
 #include "HPR_cuda_kernels.cuh"
 
+namespace {
+
+__device__ __forceinline__ HPRLP_FLOAT project_x_with_bounds(HPRLP_FLOAT value, HPRLP_FLOAT lower, HPRLP_FLOAT upper, uint8_t bound_type) {
+    if (bound_type == 0) {
+        return value;
+    }
+    if (bound_type == 1) {
+        return fmax(value, lower);
+    }
+    if (bound_type == 2) {
+        return fmin(value, upper);
+    }
+    return fmin(fmax(value, lower), upper);
+}
+
+__device__ __forceinline__ HPRLP_FLOAT project_y_delta(HPRLP_FLOAT value, HPRLP_FLOAT lower, HPRLP_FLOAT upper, uint8_t bound_type) {
+    if (bound_type == 0) {
+        return 0.0;
+    }
+    if (bound_type == 1) {
+        return fmax(lower - value, 0.0);
+    }
+    if (bound_type == 2) {
+        return fmin(upper - value, 0.0);
+    }
+    return fmax(lower - value, fmin(upper - value, 0.0));
+}
+
+}
+
 
 __global__ void conceptual_b_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int m) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -161,12 +191,25 @@ __global__ void residual_compute_Rd_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *A
 }
 
 
+__global__ void advance_halpern_factors_kernel(int *halpern_inner, HPRLP_FLOAT *halpern_factors) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        int next_inner = halpern_inner[0] + 1;
+        halpern_inner[0] = next_inner;
+        HPRLP_FLOAT fact1 = 1.0 / (next_inner + 2.0);
+        halpern_factors[0] = fact1;
+        halpern_factors[1] = 1.0 - fact1;
+    }
+}
+
+
 __global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
-                        HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n) {
+                        HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
+                        const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
-        HPRLP_FLOAT fact1 = Halpern_params[0];  // Get Halpern iteration parameters
-        HPRLP_FLOAT fact2 = Halpern_params[1];
+        HPRLP_FLOAT sigma = sigma_params[0];
+        HPRLP_FLOAT fact1 = halpern_factors[0];
+        HPRLP_FLOAT fact2 = halpern_factors[1];
         HPRLP_FLOAT xi = x[i];
         HPRLP_FLOAT ATy_ci = ATy[i] - c[i];
         HPRLP_FLOAT z_temp = xi + sigma * ATy_ci;
@@ -185,12 +228,13 @@ __global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRL
 }
 
 
-__global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT sigma, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, 
-                      HPRLP_FLOAT *last_x, HPRLP_FLOAT *Halpern_params, int n) {
+__global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT *ATy, HPRLP_FLOAT *c,
+                      HPRLP_FLOAT *last_x, const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
-        HPRLP_FLOAT fact1 = Halpern_params[0];
-        HPRLP_FLOAT fact2 = Halpern_params[1];
+        HPRLP_FLOAT sigma = sigma_params[0];
+        HPRLP_FLOAT fact1 = halpern_factors[0];
+        HPRLP_FLOAT fact2 = halpern_factors[1];
         
         HPRLP_FLOAT xi = x[i];
         HPRLP_FLOAT li = l[i];
@@ -204,12 +248,14 @@ __global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRL
     }
 }
 
-__global__ void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2,
-                        HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m) {
+__global__ void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
+                        HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int m) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < m) {
-        HPRLP_FLOAT halpern_fact1 = Halpern_params[0];
-        HPRLP_FLOAT halpern_fact2 = Halpern_params[1];
+        HPRLP_FLOAT halpern_fact1 = halpern_factors[0];
+        HPRLP_FLOAT halpern_fact2 = halpern_factors[1];
+        HPRLP_FLOAT fact1 = sigma_params[1];
+        HPRLP_FLOAT fact2 = sigma_params[2];
         HPRLP_FLOAT yi = y[i];
         HPRLP_FLOAT ai = Ax[i];
         HPRLP_FLOAT li = AL[i];
@@ -227,11 +273,15 @@ __global__ void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, H
     }
 }
 
-__global__ void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, HPRLP_FLOAT fact1, HPRLP_FLOAT fact2, HPRLP_FLOAT *last_y, HPRLP_FLOAT *Halpern_params, int m) {
+__global__ void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
+                                       HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params,
+                                       const HPRLP_FLOAT *halpern_factors, int m) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < m) {
-        HPRLP_FLOAT halpern_fact1 = Halpern_params[0];
-        HPRLP_FLOAT halpern_fact2 = Halpern_params[1];
+        HPRLP_FLOAT halpern_fact1 = halpern_factors[0];
+        HPRLP_FLOAT halpern_fact2 = halpern_factors[1];
+        HPRLP_FLOAT fact1 = sigma_params[1];
+        HPRLP_FLOAT fact2 = sigma_params[2];
         HPRLP_FLOAT yi = y[i];
         HPRLP_FLOAT ai = Ax[i];
         HPRLP_FLOAT li = AL[i];
@@ -243,5 +293,137 @@ __global__ void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FL
         HPRLP_FLOAT y_hat_val = 2 * y_bar_val - yi;
         HPRLP_FLOAT y_new_val = halpern_fact2 * y_hat_val + halpern_fact1 * y0i;
         y[i] = y_new_val;
+    }
+}
+
+__global__ void fused_update_x_z_rows_short_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+                                                   const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
+                                                   const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
+                                                   const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
+                                                   const HPRLP_FLOAT *halpern_factors,
+                                                   const int *row_ids, int nrows) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < nrows) {
+        int row = row_ids[tid];
+        HPRLP_FLOAT sigma = sigma_params[0];
+        HPRLP_FLOAT acc = 0.0;
+        int start = AT_rowPtr[row];
+        int end = AT_rowPtr[row + 1];
+        for (int idx = start; idx < end; ++idx) {
+            acc = fma(AT_value[idx], y[AT_colIndex[idx]], acc);
+        }
+
+        HPRLP_FLOAT fact1 = halpern_factors[0];
+        HPRLP_FLOAT fact2 = halpern_factors[1];
+        HPRLP_FLOAT xi = x[row];
+        HPRLP_FLOAT z_temp = fma(sigma, acc - c[row], xi);
+        HPRLP_FLOAT x_bar = project_x_with_bounds(z_temp, l[row], u[row], x_bound_type[row]);
+        HPRLP_FLOAT x_hat_value = 2.0 * x_bar - xi;
+        x[row] = fma(fact2, x_hat_value, fact1 * last_x[row]);
+        x_hat[row] = x_hat_value;
+    }
+}
+
+__global__ void fused_update_x_z_rows_warp_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+                                                  const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
+                                                  const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
+                                                  const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
+                                                  const HPRLP_FLOAT *halpern_factors,
+                                                  const int *row_ids, int nrows) {
+    int lane = threadIdx.x & 31;
+    int warp_in_block = threadIdx.x >> 5;
+    int warps_per_block = blockDim.x >> 5;
+    int row_idx = blockIdx.x * warps_per_block + warp_in_block;
+
+    if (row_idx < nrows) {
+        int row = row_ids[row_idx];
+        HPRLP_FLOAT sigma = sigma_params[0];
+        int start = AT_rowPtr[row];
+        int end = AT_rowPtr[row + 1];
+        HPRLP_FLOAT acc = 0.0;
+        for (int idx = start + lane; idx < end; idx += 32) {
+            acc = fma(AT_value[idx], y[AT_colIndex[idx]], acc);
+        }
+
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
+        }
+
+        if (lane == 0) {
+            HPRLP_FLOAT fact1 = halpern_factors[0];
+            HPRLP_FLOAT fact2 = halpern_factors[1];
+            HPRLP_FLOAT xi = x[row];
+            HPRLP_FLOAT z_temp = fma(sigma, acc - c[row], xi);
+            HPRLP_FLOAT x_bar = project_x_with_bounds(z_temp, l[row], u[row], x_bound_type[row]);
+            HPRLP_FLOAT x_hat_value = 2.0 * x_bar - xi;
+            x[row] = fma(fact2, x_hat_value, fact1 * last_x[row]);
+            x_hat[row] = x_hat_value;
+        }
+    }
+}
+
+__global__ void fused_update_y_rows_short_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+                                                 const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
+                                                 const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
+                                                 const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
+                                                 const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < nrows) {
+        int row = row_ids[tid];
+        HPRLP_FLOAT fact1 = sigma_params[1];
+        HPRLP_FLOAT fact2 = sigma_params[2];
+        HPRLP_FLOAT acc = 0.0;
+        int start = A_rowPtr[row];
+        int end = A_rowPtr[row + 1];
+        for (int idx = start; idx < end; ++idx) {
+            acc = fma(A_value[idx], x_hat[A_colIndex[idx]], acc);
+        }
+
+        HPRLP_FLOAT halpern_fact1 = halpern_factors[0];
+        HPRLP_FLOAT halpern_fact2 = halpern_factors[1];
+        HPRLP_FLOAT yi = y[row];
+        HPRLP_FLOAT v = fma(-fact1, yi, acc);
+        HPRLP_FLOAT d = project_y_delta(v, AL[row], AU[row], y_bound_type[row]);
+        HPRLP_FLOAT y_bar = fact2 * d;
+        HPRLP_FLOAT y_hat = 2.0 * y_bar - yi;
+        y[row] = fma(halpern_fact2, y_hat, halpern_fact1 * last_y[row]);
+    }
+}
+
+__global__ void fused_update_y_rows_warp_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+                                                const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
+                                                const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
+                                                const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
+                                                const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows) {
+    int lane = threadIdx.x & 31;
+    int warp_in_block = threadIdx.x >> 5;
+    int warps_per_block = blockDim.x >> 5;
+    int row_idx = blockIdx.x * warps_per_block + warp_in_block;
+
+    if (row_idx < nrows) {
+        int row = row_ids[row_idx];
+        HPRLP_FLOAT fact1 = sigma_params[1];
+        HPRLP_FLOAT fact2 = sigma_params[2];
+        int start = A_rowPtr[row];
+        int end = A_rowPtr[row + 1];
+        HPRLP_FLOAT acc = 0.0;
+        for (int idx = start + lane; idx < end; idx += 32) {
+            acc = fma(A_value[idx], x_hat[A_colIndex[idx]], acc);
+        }
+
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
+        }
+
+        if (lane == 0) {
+            HPRLP_FLOAT halpern_fact1 = halpern_factors[0];
+            HPRLP_FLOAT halpern_fact2 = halpern_factors[1];
+            HPRLP_FLOAT yi = y[row];
+            HPRLP_FLOAT v = fma(-fact1, yi, acc);
+            HPRLP_FLOAT d = project_y_delta(v, AL[row], AU[row], y_bound_type[row]);
+            HPRLP_FLOAT y_bar = fact2 * d;
+            HPRLP_FLOAT y_hat = 2.0 * y_bar - yi;
+            y[row] = fma(halpern_fact2, y_hat, halpern_fact1 * last_y[row]);
+        }
     }
 }

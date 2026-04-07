@@ -49,6 +49,24 @@ void vMemcpy_device(HPRLP_FLOAT *dst, HPRLP_FLOAT *src, int n) {
     CUDA_CHECK(cudaMemcpy(dst, src, n * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToDevice));
 }
 
+void queue_dot(HPRLP_FLOAT *reduction_scalars, int idx,
+               const HPRLP_FLOAT *x, const HPRLP_FLOAT *y, int n,
+               cublasHandle_t handle_device) {
+    CUBLAS_CHECK(cublasDdot(handle_device, n, x, 1, y, 1, reduction_scalars + idx));
+}
+
+void queue_nrm2(HPRLP_FLOAT *reduction_scalars, int idx,
+                const HPRLP_FLOAT *x, int n,
+                cublasHandle_t handle_device) {
+    CUBLAS_CHECK(cublasDnrm2(handle_device, n, x, 1, reduction_scalars + idx));
+}
+
+void fetch_reduction_scalars(HPRLP_workspace_gpu *ws) {
+    CUDA_CHECK(cudaMemcpyAsync(ws->reduction_scalars_host, ws->reduction_scalars,
+                               10 * sizeof(HPRLP_FLOAT), cudaMemcpyDeviceToHost, ws->stream));
+    CUDA_CHECK(cudaStreamSynchronize(ws->stream));
+}
+
 void ax(HPRLP_FLOAT a,  HPRLP_FLOAT *x, HPRLP_FLOAT *z, int n, cublasHandle_t cublasHandle) {
     // perform z = ax
     vMemcpy_device(z, x, n);                        // z = x

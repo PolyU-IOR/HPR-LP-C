@@ -58,6 +58,19 @@ HPRLP_FLOAT inner_product(const HPRLP_FLOAT *x, const HPRLP_FLOAT *y, int n, cub
 /*. copy device memory. */
 void vMemcpy_device(HPRLP_FLOAT *dst, HPRLP_FLOAT *src, int n);
 
+// Enqueue cublasDdot with DEVICE pointer mode: result written to reduction_scalars[idx] on device (async).
+void queue_dot(HPRLP_FLOAT *reduction_scalars, int idx,
+               const HPRLP_FLOAT *x, const HPRLP_FLOAT *y, int n,
+               cublasHandle_t handle_device);
+
+// Enqueue cublasDnrm2 with DEVICE pointer mode: result written to reduction_scalars[idx] on device (async).
+void queue_nrm2(HPRLP_FLOAT *reduction_scalars, int idx,
+                const HPRLP_FLOAT *x, int n,
+                cublasHandle_t handle_device);
+
+// Copy all 10 reduction_scalars from device to pinned host (one cudaMemcpyAsync + stream sync).
+void fetch_reduction_scalars(HPRLP_workspace_gpu *ws);
+
 int step(int iter);
 
 /*record device data to files*/

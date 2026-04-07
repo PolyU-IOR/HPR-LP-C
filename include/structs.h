@@ -2,6 +2,7 @@
 #define HPRLP_STRUCTS_H
 
 #include <chrono>
+#include <cstdint>
 #include <cublas_v2.h>
 #include <cusparse_v2.h>
 #include <limits>
@@ -28,6 +29,8 @@ struct HPRLP_parameters {
     HPRLP_FLOAT time_limit = 3600.0;
     int device_number = 0;
     int check_iter = 150;
+    bool CUSPARSE_spmv = false;
+    bool autotune_verbose = false;
 
     /* ----------Scaling Controllers---------- */
     bool use_Ruiz_scaling = true;
@@ -120,7 +123,22 @@ struct HPRLP_workspace_gpu {
     HPRLP_FLOAT *Ax;
     HPRLP_FLOAT *ATy;
 
-    HPRLP_FLOAT *Halpern_params;  // The vector to store the parameters used in Halpern iteration
+    // Dynamic scalar parameters for GPU kernels:
+    // [sigma, lambda_max*sigma, 1/(lambda_max*sigma), 1/sigma]
+    HPRLP_FLOAT *Halpern_params = nullptr;
+
+    // Device-side Halpern iteration state.
+    int *halpern_inner = nullptr;
+    HPRLP_FLOAT *halpern_factors = nullptr;
+
+    // Pinned host mirrors used for lazy scalar uploads.
+    HPRLP_FLOAT *iter_params_host = nullptr;
+    int *halpern_inner_host = nullptr;
+    HPRLP_FLOAT *halpern_factors_host = nullptr;
+
+    // Track the last uploaded runtime scalars to avoid redundant H2D copies.
+    HPRLP_FLOAT uploaded_sigma = std::numeric_limits<HPRLP_FLOAT>::quiet_NaN();
+    HPRLP_FLOAT uploaded_lambda_max = std::numeric_limits<HPRLP_FLOAT>::quiet_NaN();
 
     cudaGraph_t graph;            // CUDA Graph for capturing the main iteration
     cudaGraphExec_t graph_exec;
@@ -129,8 +147,41 @@ struct HPRLP_workspace_gpu {
     cudaStream_t stream;
 
     bool check;                 // Normally used to indicate whether the termination conditions should be checked
+    
+    bool use_custom_fused_x = false;
+    bool use_custom_fused_y = false;
+
+    uint8_t *x_bound_type = nullptr;
+    uint8_t *y_bound_type = nullptr;
+
+    int *A_rows_short = nullptr;
+    int *A_rows_medium = nullptr;
+    int *AT_rows_short = nullptr;
+    int *AT_rows_medium = nullptr;
+
+    int num_A_rows_short = 0;
+    int num_A_rows_medium = 0;
+    int num_AT_rows_short = 0;
+    int num_AT_rows_medium = 0;
 
     cublasHandle_t cublasHandle;
+
+    // 10 slots (0-indexed):
+    //  0: dot(Ax, y_temp) — used by compute_weighted_norm and collect_residuals gap
+    //  1: dot(y_temp, y_temp) — same
+    //  2: dot(x_temp, x_temp) — same
+    //  3: Rd nrm2
+    //  4: Rp nrm2
+    //  5: restart-gap dot(A*x_temp, y_temp)  [collect_residuals compute_gap path]
+    //  6: restart-gap dot(y_temp, y_temp)
+    //  7: restart-gap dot(x_temp, x_temp)
+    //  8: movement nrm2(x_temp)  [for sigma update]
+    //  9: movement nrm2(y_temp)  [for sigma update]
+    HPRLP_FLOAT *reduction_scalars = nullptr;       // device buffer, 10 elements
+    HPRLP_FLOAT *reduction_scalars_host = nullptr;  // pinned host buffer, 10 elements
+
+    // CUBLAS handle configured with CUBLAS_POINTER_MODE_DEVICE for async queued ops.
+    cublasHandle_t cublasHandle_device = nullptr;
 };
 
 
