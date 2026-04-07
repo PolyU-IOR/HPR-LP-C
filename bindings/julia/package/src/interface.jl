@@ -220,6 +220,8 @@ Solver configuration parameters.
 - `time_limit::Float64`: Time limit in seconds (default: 3600.0)
 - `device_number::Int`: CUDA device ID (default: 0)
 - `check_iter::Int`: Iterations between convergence checks (default: 150)
+- `CUSPARSE_spmv::Bool`: Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: false)
+- `autotune_verbose::Bool`: Print backend autotuning diagnostics when fused kernels are enabled (default: false)
 - `use_Ruiz_scaling::Bool`: Enable Ruiz equilibration scaling (default: true)
 - `use_Pock_Chambolle_scaling::Bool`: Enable Pock-Chambolle scaling (default: true)
 - `use_bc_scaling::Bool`: Enable bounds/cost scaling (default: true)
@@ -241,6 +243,8 @@ mutable struct Parameters
     time_limit::Float64
     device_number::Int
     check_iter::Int
+    CUSPARSE_spmv::Bool
+    autotune_verbose::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
@@ -251,11 +255,14 @@ mutable struct Parameters
         time_limit::Float64 = 3600.0,
         device_number::Int = 0,
         check_iter::Int = 150,
+        CUSPARSE_spmv::Bool = false,
+        autotune_verbose::Bool = false,
         use_Ruiz_scaling::Bool = true,
         use_Pock_Chambolle_scaling::Bool = true,
         use_bc_scaling::Bool = true)
         
         new(Int(max_iter), stop_tol, time_limit, Int(device_number), Int(check_iter),
+            CUSPARSE_spmv, autotune_verbose,
             use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling)
     end
 end
@@ -270,6 +277,8 @@ function to_c_struct(params::Parameters)
     c_params.time_limit = params.time_limit
     c_params.device_number = Int32(params.device_number)
     c_params.check_iter = Int32(params.check_iter)
+    c_params.CUSPARSE_spmv = params.CUSPARSE_spmv
+    c_params.autotune_verbose = params.autotune_verbose
     c_params.use_Ruiz_scaling = params.use_Ruiz_scaling
     c_params.use_Pock_Chambolle_scaling = params.use_Pock_Chambolle_scaling
     c_params.use_bc_scaling = params.use_bc_scaling

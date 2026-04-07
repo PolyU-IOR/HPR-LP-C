@@ -94,6 +94,8 @@ mutable struct C_HPRLP_parameters
     time_limit::Float64
     device_number::Int32
     check_iter::Int32
+    CUSPARSE_spmv::Bool
+    autotune_verbose::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
@@ -105,6 +107,8 @@ mutable struct C_HPRLP_parameters
             3600.0,          # time_limit
             0,               # device_number
             150,             # check_iter
+            false,           # CUSPARSE_spmv
+            false,           # autotune_verbose
             true,            # use_Ruiz_scaling
             true,            # use_Pock_Chambolle_scaling
             true             # use_bc_scaling

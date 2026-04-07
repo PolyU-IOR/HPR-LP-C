@@ -18,6 +18,10 @@ class Parameters:
         CUDA device number to use (default: 0)
     check_iter : int
         Number of iterations between convergence checks (default: 150)
+    CUSPARSE_spmv : bool
+        Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: False)
+    autotune_verbose : bool
+        Print backend autotuning diagnostics when fused kernels are enabled (default: False)
     use_Ruiz_scaling : bool
         Enable Ruiz equilibration scaling (default: True)
     use_Pock_Chambolle_scaling : bool
@@ -39,6 +43,8 @@ class Parameters:
         self.time_limit = 3600.0
         self.device_number = 0
         self.check_iter = 150
+        self.CUSPARSE_spmv = False
+        self.autotune_verbose = False
         self.use_Ruiz_scaling = True
         self.use_Pock_Chambolle_scaling = True
         self.use_bc_scaling = True
@@ -47,7 +53,9 @@ class Parameters:
         return (f"Parameters(max_iter={self.max_iter}, "
                 f"stop_tol={self.stop_tol}, "
                 f"time_limit={self.time_limit}, "
-                f"device_number={self.device_number})")
+            f"device_number={self.device_number}, "
+            f"CUSPARSE_spmv={self.CUSPARSE_spmv}, "
+            f"autotune_verbose={self.autotune_verbose})")
     
     def to_core_param(self):
         """Convert to C++ Parameters object for pybind11"""
@@ -59,6 +67,8 @@ class Parameters:
             param.time_limit = self.time_limit
             param.device_number = self.device_number
             param.check_iter = self.check_iter
+            param.CUSPARSE_spmv = self.CUSPARSE_spmv
+            param.autotune_verbose = self.autotune_verbose
             param.use_Ruiz_scaling = self.use_Ruiz_scaling
             param.use_Pock_Chambolle_scaling = self.use_Pock_Chambolle_scaling
             param.use_bc_scaling = self.use_bc_scaling
@@ -83,6 +93,8 @@ class Parameters:
             'time_limit': self.time_limit,
             'device_number': self.device_number,
             'check_iter': self.check_iter,
+            'CUSPARSE_spmv': self.CUSPARSE_spmv,
+            'autotune_verbose': self.autotune_verbose,
             'use_Ruiz_scaling': self.use_Ruiz_scaling,
             'use_Pock_Chambolle_scaling': self.use_Pock_Chambolle_scaling,
             'use_bc_scaling': self.use_bc_scaling,

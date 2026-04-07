@@ -84,6 +84,39 @@ def _detect_cuda_version(cuda_path: str):
         return None
 
 
+def detect_cuda_architectures():
+    """Return a CMake-compatible CUDA architecture list or 'native' as fallback."""
+    env_value = os.environ.get('CMAKE_CUDA_ARCHITECTURES')
+    if env_value:
+        return env_value
+
+    try:
+        output = subprocess.check_output(
+            ['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return 'native'
+
+    architectures = []
+    for line in output.splitlines():
+        value = line.strip()
+        if not value or value == 'N/A':
+            continue
+        match = re.match(r'^(\d+)\.(\d+)$', value)
+        if not match:
+            continue
+        arch = f"{match.group(1)}{match.group(2)}"
+        if arch not in architectures:
+            architectures.append(arch)
+
+    if not architectures:
+        return 'native'
+
+    return ';'.join(architectures)
+
+
 def find_cuda_home():
     """Locate a CUDA installation that satisfies the minimum version requirement."""
 
@@ -226,6 +259,9 @@ class CMakeBuild(build_ext):
             '-DBUILD_EXAMPLES=OFF',    # Don't build examples during pip install
         ]
 
+        cuda_architectures = detect_cuda_architectures()
+        cmake_args.append(f'-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}')
+
         # Work out Python include directories. Some bare-metal Python installs lack headers unless
         # python-dev is available, so fail early with a helpful hint instead of a cryptic CMake error.
         include_candidates = []
@@ -323,6 +359,7 @@ class CMakeBuild(build_ext):
 
         # Run CMake configuration
         print(f"Running CMake configuration in {self.build_temp}")
+        print(f"Using CUDA architectures: {cuda_architectures}")
         
         # Source directory is two levels up (../../)
         source_dir = os.path.abspath(os.path.join(ext.sourcedir, '../..'))
