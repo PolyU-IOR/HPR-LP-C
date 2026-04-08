@@ -168,12 +168,12 @@ struct HPRLP_workspace_gpu {
     cublasHandle_t cublasHandle;
 
     // 10 slots (0-indexed):
-    //  0: dot(Ax, y_temp) — used by compute_weighted_norm and collect_residuals gap
+    //  0: dot(Ax, y_temp) — used by compute_weighted_norm and compute_residuals gap
     //  1: dot(y_temp, y_temp) — same
     //  2: dot(x_temp, x_temp) — same
     //  3: Rd nrm2
     //  4: Rp nrm2
-    //  5: restart-gap dot(A*x_temp, y_temp)  [collect_residuals compute_gap path]
+    //  5: restart-gap dot(A*x_temp, y_temp)  [compute_residuals compute_gap path]
     //  6: restart-gap dot(y_temp, y_temp)
     //  7: restart-gap dot(x_temp, x_temp)
     //  8: movement nrm2(x_temp)  [for sigma update]

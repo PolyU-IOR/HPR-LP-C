@@ -178,7 +178,7 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
                             time_since(t_start_alg) > param->time_limit);   // reach maximum run time
 
         if (periodic_check || print_flag) {
-            collect_residuals(&workspace, &lp_info_gpu, &scaling_info, &residuals, iter,
+            compute_residuals(&workspace, &lp_info_gpu, &scaling_info, &residuals, iter,
                               &restart_info, compute_gap);    // KKT residuals + optional gap
             residuals.is_updated = true;
         } 

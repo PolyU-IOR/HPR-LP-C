@@ -226,7 +226,7 @@ void residual_compute_Rd_cusparse(HPRLP_workspace_gpu *ws, Scaling_info *scaling
 }
 
 
-void collect_residuals(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, Scaling_info *scaling,
+void compute_residuals(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, Scaling_info *scaling,
                        HPRLP_residuals *residual, int iter,
                        HPRLP_restart *restart_info, bool compute_gap) {
     int n = ws->n;
@@ -551,7 +551,7 @@ void autotune_custom_update_backends(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, S
         update_zx_check_gpu(ws);
         update_y_check_gpu(ws);
         HPRLP_residuals residual{};
-        collect_residuals(ws, lp, scaling, &residual, bench_iters);
+        compute_residuals(ws, lp, scaling, &residual, bench_iters);
         CUDA_CHECK(cudaStreamSynchronize(ws->stream));
         return residual.KKTx_and_gap_org_bar;
     };

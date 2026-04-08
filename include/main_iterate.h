@@ -14,7 +14,7 @@ void residual_compute_Rd_cusparse(HPRLP_workspace_gpu *ws, Scaling_info *scaling
 // Collect KKT residuals.  When compute_gap=true, also computes restart_info->current_gap
 // (batched with the same device→host fetch to avoid an extra sync).
 // restart_info may be nullptr when compute_gap=false (e.g. autotune probes).
-void collect_residuals(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, Scaling_info *scaling,
+void compute_residuals(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, Scaling_info *scaling,
                        HPRLP_residuals *residual, int iter,
                        HPRLP_restart *restart_info = nullptr, bool compute_gap = false);
 
