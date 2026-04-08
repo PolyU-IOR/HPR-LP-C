@@ -97,12 +97,15 @@ void project_bound_duals(const LP_info_cpu *model, std::vector<HPRLP_FLOAT> *z_p
     }
 }
 
-HPRLP_FLOAT squared_norm_with_finite_entries(const HPRLP_FLOAT *values, int len) {
+HPRLP_FLOAT squared_norm_of_conceptual_rhs(const HPRLP_FLOAT *lower,
+                                           const HPRLP_FLOAT *upper,
+                                           int len) {
     HPRLP_FLOAT sum_sq = 0.0;
     for (int i = 0; i < len; ++i) {
-        if (std::isfinite(values[i])) {
-            sum_sq += values[i] * values[i];
-        }
+        const HPRLP_FLOAT lower_val = std::isfinite(lower[i]) ? std::abs(lower[i]) : 0.0;
+        const HPRLP_FLOAT upper_val = std::isfinite(upper[i]) ? std::abs(upper[i]) : 0.0;
+        const HPRLP_FLOAT rhs_val = std::max(lower_val, upper_val);
+        sum_sq += rhs_val * rhs_val;
     }
     return sum_sq;
 }
@@ -123,10 +126,14 @@ OriginalKktMetrics compute_original_kkt_metrics(const LP_info_cpu *model,
     csr_matvec(model->A, x, Ax.data());
     csr_transpose_matvec(model->A, y_proj.data(), ATy.data());
 
+    HPRLP_FLOAT norm_c_sq = 0.0;
+    for (int j = 0; j < model->n; ++j) {
+        norm_c_sq += model->c[j] * model->c[j];
+    }
+
     const HPRLP_FLOAT norm_b = 1.0 + std::sqrt(
-        squared_norm_with_finite_entries(model->AL, model->m) +
-        squared_norm_with_finite_entries(model->AU, model->m));
-    const HPRLP_FLOAT norm_c = 1.0 + std::sqrt(squared_norm_with_finite_entries(model->c, model->n));
+        squared_norm_of_conceptual_rhs(model->AL, model->AU, model->m));
+    const HPRLP_FLOAT norm_c = 1.0 + std::sqrt(norm_c_sq);
 
     HPRLP_FLOAT err_Ax_sq = 0.0;
     for (int i = 0; i < model->m; ++i) {
