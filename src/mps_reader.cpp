@@ -5,9 +5,58 @@
 #include <math.h>
 #include <iostream>
 #include <iomanip>
+#include <string>
+#include <zlib.h>
 
 #define INITIAL_CAPACITY 8192
 #define INITIAL_NNZ_CAPACITY 100000
+
+namespace {
+
+bool has_gzip_extension(const char *filename) {
+    if (!filename) return false;
+
+    const std::string path(filename);
+    return path.size() >= 3 && path.compare(path.size() - 3, 3, ".gz") == 0;
+}
+
+FILE* open_mps_stream(const char *filename) {
+    if (!has_gzip_extension(filename)) {
+        return fopen(filename, "r");
+    }
+
+    gzFile gz_fp = gzopen(filename, "rb");
+    if (!gz_fp) {
+        return NULL;
+    }
+
+    FILE *tmp_fp = tmpfile();
+    if (!tmp_fp) {
+        gzclose(gz_fp);
+        return NULL;
+    }
+
+    char buffer[65536];
+    int bytes_read = 0;
+    while ((bytes_read = gzread(gz_fp, buffer, sizeof(buffer))) > 0) {
+        const size_t bytes_written = fwrite(buffer, 1, static_cast<size_t>(bytes_read), tmp_fp);
+        if (bytes_written != static_cast<size_t>(bytes_read)) {
+            fclose(tmp_fp);
+            gzclose(gz_fp);
+            return NULL;
+        }
+    }
+
+    const int gz_status = gzclose(gz_fp);
+    if (bytes_read < 0 || gz_status != Z_OK || fseek(tmp_fp, 0, SEEK_SET) != 0) {
+        fclose(tmp_fp);
+        return NULL;
+    }
+
+    return tmp_fp;
+}
+
+}  // namespace
 
 /* Fast HPRLP_FLOAT parsing - atof is actually quite optimized in modern libc,
    but we can add inline hint */
@@ -1139,7 +1188,7 @@ error:
 }
 
 QPSData* readqps(const char *filename, MPSFormat format) {
-    FILE *fp = fopen(filename, "r");
+    FILE *fp = open_mps_stream(filename);
     if (!fp) {
         std::cerr << "Error: Cannot open file " << filename << "\n";
         return NULL;

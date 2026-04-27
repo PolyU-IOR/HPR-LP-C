@@ -87,7 +87,7 @@ PSLP_CFLAGS := -O3 -fPIC
 CUDA_LIB_DIR := $(shell if [ -d $(CUDA_PATH)/lib64 ]; then echo $(CUDA_PATH)/lib64; \
                          else echo $(CUDA_PATH)/lib; fi)
 LIB_DIRS := -L$(CUDA_LIB_DIR) -L$(LIB_DIR)
-LIBS := -lcublas -lcusolver -lcusparse -lcurand
+LIBS := -lcublas -lcusolver -lcusparse -lcurand -lz
 
 # Library sources (solver core without main files)
 LIB_SOURCES := \

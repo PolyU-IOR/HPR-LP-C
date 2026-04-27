@@ -119,7 +119,7 @@ LP_info_cpu* create_model_from_arrays(int m, int n, int nnz,
  * @return Pointer to LP_info_cpu model, or NULL on error
  * 
  * @note The returned model must be freed using free_model()
- * @note Supports both fixed and free MPS format
+ * @note Supports both fixed and free MPS format, including gzip-compressed .mps.gz files
  * @note Automatically removes empty and unconstrained rows
  * 
  * @code{.cpp}

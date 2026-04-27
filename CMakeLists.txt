@@ -17,6 +17,7 @@ option(ENABLE_DOXYGEN "Build documentation" OFF)
 
 # Find CUDA toolkit
 find_package(CUDAToolkit REQUIRED)
+find_package(ZLIB REQUIRED)
 
 # Auto-detect CUDA architecture if not specified
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
@@ -136,6 +137,7 @@ if(BUILD_STATIC_LIB)
             CUDA::cusolver
             CUDA::cusparse
             CUDA::curand
+            ZLIB::ZLIB
     )
     
     # Set library properties
@@ -172,6 +174,7 @@ if(BUILD_SHARED_LIB)
             CUDA::cusolver
             CUDA::cusparse
             CUDA::curand
+            ZLIB::ZLIB
     )
     
     # Set library properties

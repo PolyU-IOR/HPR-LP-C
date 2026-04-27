@@ -12,9 +12,9 @@ inline bool file_exists(const std::string& path) {
 }
 
 static void print_usage(const char* prog) {
-    std::cout << "Usage: " << prog << " -i <input.mps> [options]\n"
+    std::cout << "Usage: " << prog << " -i <input.mps|input.mps.gz> [options]\n"
               << "\nOptions:\n"
-              << "  -i, --input <path>         Path to input .mps file (required)\n"
+              << "  -i, --input <path>         Path to input .mps or .mps.gz file (required)\n"
               << "      --device <id>          CUDA device id (default: 0)\n"
               << "      --max-iter <N>         Max iterations (default: INT32_MAX)\n"
               << "      --tol <eps>            Stopping tolerance (default: 1e-4)\n"
@@ -27,7 +27,7 @@ static void print_usage(const char* prog) {
               << "      --bc <true/false>      Enable/disable bounds/cost scaling (default: true)\n"
               << "      --presolve <true/false>  Enable/disable embedded PSLP presolve (default: true)\n"
               << "  -h, --help                 Show this help and exit\n"
-              << "\nExample:\n  " << prog << " -i model.mps --device 0 --time-limit 3600 --tol 1e-4\n";
+              << "\nExample:\n  " << prog << " -i model.mps.gz --device 0 --time-limit 3600 --tol 1e-4\n";
 }
 
 int main(int argc, char** argv) {
