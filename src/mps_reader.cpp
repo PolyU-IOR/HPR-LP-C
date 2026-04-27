@@ -1425,8 +1425,6 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     }
     
     std::cout << "problem information: nRow = " << m << ", nCol = " << n << ", nnz A = " << nnz << std::endl;
-    std::cout << "                     number of equalities = 0" << std::endl;
-    std::cout << "                     number of inequalities = " << m << std::endl;
     std::cout << std::endl;
     
     /* Set dimensions */
