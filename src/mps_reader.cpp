@@ -1,4 +1,5 @@
 #include "mps_reader.h"
+#include "preprocess.h"
 #include "utils.h"
 #include <string.h>
 #include <ctype.h>
@@ -1430,15 +1431,38 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     /* Set dimensions */
     lp->m = m;
     lp->n = n;
+    lp->A = nullptr;
+    lp->AL = nullptr;
+    lp->AU = nullptr;
+    lp->c = nullptr;
+    lp->l = nullptr;
+    lp->u = nullptr;
+    lp->obj_constant = 0.0;
     
     /* Allocate and populate constraint matrix A */
     lp->A = (sparseMatrix*)malloc(sizeof(sparseMatrix));
+    if (!lp->A) {
+        std::cerr << "Error: Failed to allocate sparse matrix structure for model build\n";
+        lp->m = 0;
+        lp->n = 0;
+        return;
+    }
     lp->A->row = m;
     lp->A->col = n;
     lp->A->numElements = nnz;
+    lp->A->rowPtr = nullptr;
+    lp->A->colIndex = nullptr;
+    lp->A->value = nullptr;
     lp->A->rowPtr = (int*)malloc((m + 1) * sizeof(int));
     lp->A->colIndex = (int*)malloc(nnz * sizeof(int));
     lp->A->value = (HPRLP_FLOAT*)malloc(nnz * sizeof(HPRLP_FLOAT));
+    if (!lp->A->rowPtr || !lp->A->colIndex || !lp->A->value) {
+        std::cerr << "Error: Failed to allocate constraint matrix arrays for model build\n";
+        free_lp_info_cpu(lp);
+        lp->m = 0;
+        lp->n = 0;
+        return;
+    }
     
     memcpy(lp->A->rowPtr, csr_A->row_ptr, (m + 1) * sizeof(int));
     memcpy(lp->A->colIndex, csr_A->col_idx, nnz * sizeof(int));
@@ -1447,16 +1471,37 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     /* Allocate and copy constraint bounds */
     lp->AL = (HPRLP_FLOAT*)malloc(m * sizeof(HPRLP_FLOAT));
     lp->AU = (HPRLP_FLOAT*)malloc(m * sizeof(HPRLP_FLOAT));
+    if (!lp->AL || !lp->AU) {
+        std::cerr << "Error: Failed to allocate constraint bound arrays for model build\n";
+        free_lp_info_cpu(lp);
+        lp->m = 0;
+        lp->n = 0;
+        return;
+    }
     memcpy(lp->AL, AL, sizeof(HPRLP_FLOAT) * m);
     memcpy(lp->AU, AU, sizeof(HPRLP_FLOAT) * m);
     
     /* Allocate and copy objective coefficients */
     lp->c = (HPRLP_FLOAT*)malloc(n * sizeof(HPRLP_FLOAT));
+    if (!lp->c) {
+        std::cerr << "Error: Failed to allocate objective array for model build\n";
+        free_lp_info_cpu(lp);
+        lp->m = 0;
+        lp->n = 0;
+        return;
+    }
     memcpy(lp->c, c, sizeof(HPRLP_FLOAT) * n);
     
     /* Allocate and copy variable bounds */
     lp->l = (HPRLP_FLOAT*)malloc(n * sizeof(HPRLP_FLOAT));
     lp->u = (HPRLP_FLOAT*)malloc(n * sizeof(HPRLP_FLOAT));
+    if (!lp->l || !lp->u) {
+        std::cerr << "Error: Failed to allocate variable bound arrays for model build\n";
+        free_lp_info_cpu(lp);
+        lp->m = 0;
+        lp->n = 0;
+        return;
+    }
     memcpy(lp->l, l, sizeof(HPRLP_FLOAT) * n);
     memcpy(lp->u, u, sizeof(HPRLP_FLOAT) * n);
     
