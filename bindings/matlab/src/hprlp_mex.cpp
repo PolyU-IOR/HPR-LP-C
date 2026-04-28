@@ -308,6 +308,12 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             if ((field = mxGetField(param_struct, 0, "autotune_verbose")) != NULL) {
                 param->autotune_verbose = getScalarBool(field, "autotune_verbose");
             }
+            if ((field = mxGetField(param_struct, 0, "use_CR_scaling")) != NULL) {
+                param->use_CR_scaling = getScalarBool(field, "use_CR_scaling");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_GM_scaling")) != NULL) {
+                param->use_GM_scaling = getScalarBool(field, "use_GM_scaling");
+            }
             if ((field = mxGetField(param_struct, 0, "use_Ruiz_scaling")) != NULL) {
                 param->use_Ruiz_scaling = getScalarBool(field, "use_Ruiz_scaling");
             }

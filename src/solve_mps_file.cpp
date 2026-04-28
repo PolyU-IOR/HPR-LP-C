@@ -22,6 +22,8 @@ static void print_usage(const char* prog) {
               << "      --check-iter <N>       Check interval (default: 150)\n"
               << "      --cusparse-spmv <true/false>  Force cuSPARSE-only normal updates (default: false)\n"
               << "      --autotune-verbose <true/false>  Print fused backend autotune results (default: false)\n"
+              << "      --cr <true/false>      Enable/disable Curtis-Reid prescaling (default: false)\n"
+              << "      --gm <true/false>      Enable/disable geometric-mean prescaling (default: true)\n"
               << "      --ruiz <true/false>    Enable/disable Ruiz scaling (default: true)\n"
               << "      --pock <true/false>    Enable/disable Pock-Chambolle scaling (default: true)\n"
               << "      --bc <true/false>      Enable/disable bounds/cost scaling (default: true)\n"
@@ -76,6 +78,14 @@ int main(int argc, char** argv) {
             need_value(a);
             std::string val = argv[++i];
             param.autotune_verbose = (val == "true" || val == "1");
+        } else if (std::strcmp(a, "--cr") == 0) {
+            need_value(a);
+            std::string val = argv[++i];
+            param.use_CR_scaling = (val == "true" || val == "1");
+        } else if (std::strcmp(a, "--gm") == 0) {
+            need_value(a);
+            std::string val = argv[++i];
+            param.use_GM_scaling = (val == "true" || val == "1");
         } else if (std::strcmp(a, "--ruiz") == 0) {
             need_value(a);
             std::string val = argv[++i];

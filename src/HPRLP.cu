@@ -38,6 +38,8 @@ static void print_parameters(const HPRLP_parameters *param) {
     std::cout << "  Autotune Verbose:    " << (param->autotune_verbose ? "Enabled" : "Disabled") << "\n";
     std::cout << "  PSLP Presolve:       " << (param->use_presolve ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Scaling:\n";
+    std::cout << "    - Curtis-Reid:     " << (param->use_CR_scaling ? "Enabled" : "Disabled") << "\n";
+    std::cout << "    - Geometric Mean:  " << (param->use_GM_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Ruiz:            " << (param->use_Ruiz_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Pock-Chambolle:  " << (param->use_Pock_Chambolle_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Bounds/Cost:     " << (param->use_bc_scaling ? "Enabled" : "Disabled") << "\n";

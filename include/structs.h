@@ -32,6 +32,8 @@ struct HPRLP_parameters {
     bool autotune_verbose = false;
 
     /* ----------Scaling Controllers---------- */
+    bool use_CR_scaling = false;
+    bool use_GM_scaling = true;
     bool use_Ruiz_scaling = true;
     bool use_Pock_Chambolle_scaling = true;
     bool use_bc_scaling = true;

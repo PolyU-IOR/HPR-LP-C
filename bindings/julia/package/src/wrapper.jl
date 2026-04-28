@@ -96,6 +96,8 @@ mutable struct C_HPRLP_parameters
     check_iter::Int32
     CUSPARSE_spmv::Bool
     autotune_verbose::Bool
+    use_CR_scaling::Bool
+    use_GM_scaling::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
@@ -110,6 +112,8 @@ mutable struct C_HPRLP_parameters
             150,             # check_iter
             false,           # CUSPARSE_spmv
             false,           # autotune_verbose
+            false,           # use_CR_scaling
+            true,            # use_GM_scaling
             true,            # use_Ruiz_scaling
             true,            # use_Pock_Chambolle_scaling
             true,            # use_bc_scaling

@@ -119,6 +119,38 @@ __global__ void CSR_A_row_norm_kernel(int m, int *rowPtr, int *colIndex, HPRLP_F
     } 
 }
 
+__global__ void CSR_A_row_geometric_mean_kernel(int m, int *rowPtr, HPRLP_FLOAT *value, HPRLP_FLOAT *result) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m) {
+        const int start = rowPtr[i];
+        const int end = rowPtr[i + 1];
+        if (start == end) {
+            result[i] = 1.0;
+            return;
+        }
+
+        HPRLP_FLOAT log_sum = 0.0;
+        int nnz = 0;
+        for (int j = start; j < end; ++j) {
+            const HPRLP_FLOAT abs_value = std::fabs(value[j]);
+            if (abs_value > 0.0) {
+                log_sum += std::log(abs_value);
+                ++nnz;
+            }
+        }
+
+        if (nnz == 0) {
+            result[i] = 1.0;
+            return;
+        }
+
+        result[i] = std::sqrt(std::exp(log_sum / static_cast<HPRLP_FLOAT>(nnz)));
+        if (result[i] < 1e-15) {
+            result[i] = 1.0;
+        }
+    }
+}
+
 
 
 __global__ void mul_CSR_A_row_kernel(int m, int *rowPtr, int *colIndex, HPRLP_FLOAT *value, HPRLP_FLOAT *x, bool divide) {

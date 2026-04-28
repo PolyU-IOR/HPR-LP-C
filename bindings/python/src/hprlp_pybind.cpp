@@ -33,6 +33,8 @@ public:
     int check_iter;
     bool CUSPARSE_spmv;
     bool autotune_verbose;
+    bool use_CR_scaling;
+    bool use_GM_scaling;
     bool use_Ruiz_scaling;
     bool use_Pock_Chambolle_scaling;
     bool use_bc_scaling;
@@ -46,6 +48,8 @@ public:
           check_iter(150),
           CUSPARSE_spmv(false),
           autotune_verbose(false),
+          use_CR_scaling(false),
+          use_GM_scaling(true),
           use_Ruiz_scaling(true),
           use_Pock_Chambolle_scaling(true),
           use_bc_scaling(true),
@@ -61,6 +65,8 @@ public:
         param.check_iter = check_iter;
         param.CUSPARSE_spmv = CUSPARSE_spmv;
         param.autotune_verbose = autotune_verbose;
+        param.use_CR_scaling = use_CR_scaling;
+        param.use_GM_scaling = use_GM_scaling;
         param.use_Ruiz_scaling = use_Ruiz_scaling;
         param.use_Pock_Chambolle_scaling = use_Pock_Chambolle_scaling;
         param.use_bc_scaling = use_bc_scaling;
@@ -340,6 +346,10 @@ PYBIND11_MODULE(_hprlp_core, m) {
                   "Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning")
         .def_readwrite("autotune_verbose", &PyParameter::autotune_verbose,
                   "Print backend autotuning diagnostics when fused kernels are enabled")
+        .def_readwrite("use_CR_scaling", &PyParameter::use_CR_scaling,
+              "Use Curtis-Reid prescaling before geometric-mean/Ruiz scaling (default: False)")
+        .def_readwrite("use_GM_scaling", &PyParameter::use_GM_scaling,
+                  "Use geometric-mean prescaling before Ruiz scaling (default: True)")
         .def_readwrite("use_Ruiz_scaling", &PyParameter::use_Ruiz_scaling,
                       "Use Ruiz scaling (default: True)")
         .def_readwrite("use_Pock_Chambolle_scaling", &PyParameter::use_Pock_Chambolle_scaling,
