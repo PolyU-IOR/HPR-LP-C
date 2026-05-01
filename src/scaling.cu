@@ -120,30 +120,6 @@ void scaling(LP_info_gpu *lp_info_gpu, Scaling_info* scaling_info, const HPRLP_p
         apply_curtis_reid_scaling(lp_info_gpu, rowNormA, colNormA, tempNorm1, tempNorm2);
     }
 
-    if (param->use_GM_scaling) {
-        for (int i = 0; i < 20; ++i) {
-            CSR_A_row_geometric_mean(lp_info_gpu->A, tempNorm1);
-            vector_dot_product(rowNormA, tempNorm1, rowNormA, m, false);
-
-            vector_dot_product(lp_info_gpu->AL, tempNorm1, lp_info_gpu->AL, m, true);
-            vector_dot_product(lp_info_gpu->AU, tempNorm1, lp_info_gpu->AU, m, true);
-
-            CSR_A_row_geometric_mean(lp_info_gpu->AT, tempNorm2);
-            vector_dot_product(colNormA, tempNorm2, colNormA, n, false);
-
-            mul_CSR_A_row(lp_info_gpu->A, tempNorm1, true);
-            mul_CSR_AT_row(lp_info_gpu->AT, tempNorm1, true);
-
-            mul_CSR_A_row(lp_info_gpu->AT, tempNorm2, true);
-            mul_CSR_AT_row(lp_info_gpu->A, tempNorm2, true);
-
-            vector_dot_product(lp_info_gpu->c, tempNorm2, lp_info_gpu->c, n, true);
-
-            vector_dot_product(lp_info_gpu->l, tempNorm2, lp_info_gpu->l, n, false);
-            vector_dot_product(lp_info_gpu->u, tempNorm2, lp_info_gpu->u, n, false);
-        }
-    }
-
     if (param->use_Ruiz_scaling){
 
         for (int i = 0; i < 10; ++i) {

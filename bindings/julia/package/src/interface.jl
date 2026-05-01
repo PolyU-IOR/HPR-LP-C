@@ -223,7 +223,6 @@ Solver configuration parameters.
 - `CUSPARSE_spmv::Bool`: Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: false)
 - `autotune_verbose::Bool`: Print backend autotuning diagnostics when fused kernels are enabled (default: false)
 - `use_CR_scaling::Bool`: Enable Curtis-Reid prescaling before the other scaling passes (default: false)
-- `use_GM_scaling::Bool`: Enable geometric-mean prescaling before Ruiz scaling (default: true)
 - `use_Ruiz_scaling::Bool`: Enable Ruiz equilibration scaling (default: true)
 - `use_Pock_Chambolle_scaling::Bool`: Enable Pock-Chambolle scaling (default: true)
 - `use_bc_scaling::Bool`: Enable bounds/cost scaling (default: true)
@@ -249,7 +248,6 @@ mutable struct Parameters
     CUSPARSE_spmv::Bool
     autotune_verbose::Bool
     use_CR_scaling::Bool
-    use_GM_scaling::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
@@ -264,7 +262,6 @@ mutable struct Parameters
         CUSPARSE_spmv::Bool = false,
         autotune_verbose::Bool = false,
         use_CR_scaling::Bool = false,
-        use_GM_scaling::Bool = true,
         use_Ruiz_scaling::Bool = true,
         use_Pock_Chambolle_scaling::Bool = true,
         use_bc_scaling::Bool = true,
@@ -272,7 +269,7 @@ mutable struct Parameters
         
         new(Int(max_iter), stop_tol, time_limit, Int(device_number), Int(check_iter),
             CUSPARSE_spmv, autotune_verbose,
-            use_CR_scaling, use_GM_scaling, use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling, use_presolve)
+            use_CR_scaling, use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling, use_presolve)
     end
 end
 
@@ -289,7 +286,6 @@ function to_c_struct(params::Parameters)
     c_params.CUSPARSE_spmv = params.CUSPARSE_spmv
     c_params.autotune_verbose = params.autotune_verbose
     c_params.use_CR_scaling = params.use_CR_scaling
-    c_params.use_GM_scaling = params.use_GM_scaling
     c_params.use_Ruiz_scaling = params.use_Ruiz_scaling
     c_params.use_Pock_Chambolle_scaling = params.use_Pock_Chambolle_scaling
     c_params.use_bc_scaling = params.use_bc_scaling

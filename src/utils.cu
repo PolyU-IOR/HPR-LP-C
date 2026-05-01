@@ -24,10 +24,6 @@ void CSR_A_row_norm(const sparseMatrix *A, HPRLP_FLOAT *result, int norm) {
     CSR_A_row_norm_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->colIndex, A->value, result, norm);
 }
 
-void CSR_A_row_geometric_mean(const sparseMatrix *A, HPRLP_FLOAT *result) {
-    CSR_A_row_geometric_mean_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->value, result);
-}
-
 void mul_CSR_A_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide) {
     mul_CSR_A_row_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
 }

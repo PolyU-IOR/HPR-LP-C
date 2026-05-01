@@ -33,8 +33,6 @@ void diag_AAT(sparseMatrix A, HPRLP_FLOAT *result);
 /*----------   1. norm = 99, compute row-wise inf-norm of CSR sparse matrix A.    2. norm = 1, compute l1 norm instead*/
 void CSR_A_row_norm(const sparseMatrix *A, HPRLP_FLOAT *result, int norm);
 
-void CSR_A_row_geometric_mean(const sparseMatrix *A, HPRLP_FLOAT *result);
-
 void mul_CSR_A_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide);         // row-wise scaling
 
 void mul_CSR_AT_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide);        // col-wise scaling

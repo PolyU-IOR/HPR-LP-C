@@ -39,7 +39,6 @@ static void print_parameters(const HPRLP_parameters *param) {
     std::cout << "  PSLP Presolve:       " << (param->use_presolve ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Scaling:\n";
     std::cout << "    - Curtis-Reid:     " << (param->use_CR_scaling ? "Enabled" : "Disabled") << "\n";
-    std::cout << "    - Geometric Mean:  " << (param->use_GM_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Ruiz:            " << (param->use_Ruiz_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Pock-Chambolle:  " << (param->use_Pock_Chambolle_scaling ? "Enabled" : "Disabled") << "\n";
     std::cout << "    - Bounds/Cost:     " << (param->use_bc_scaling ? "Enabled" : "Disabled") << "\n";
@@ -122,6 +121,8 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     // Print parameters
     print_parameters(param);
 
+    auto t_start_setup = time_now();
+
     // Initialize CUDA device
     initialize_device(param->device_number);
 
@@ -136,9 +137,14 @@ HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_param
     workspace.n = lp_info_cpu->n;
     allocate_memory(&workspace, &lp_info_gpu, param);
 
+    cudaDeviceSynchronize();
+    std::cout << "Setup (copy and allocation) time = " << std::fixed << std::setprecision(2) << time_since(t_start_setup) << " seconds" << std::endl;
+
+    auto t_start_scaling = time_now();
     // Scaling part: 1.Ruiz_Scaling, 2.PC_Scaling, 3.bc_scaling
     Scaling_info scaling_info;
     scaling(&lp_info_gpu, &scaling_info, param, workspace.cublasHandle);
+    std::cout << "Scaling time = " << std::fixed << std::setprecision(2) << time_since(t_start_scaling) << " seconds" << std::endl;
 
     /* ----------The alg time is started!---------- */
     auto t_start_alg = time_now();
