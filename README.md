@@ -75,9 +75,13 @@ See `examples/c(cpp)/README.md` for details on using HPR-LP-C in external projec
 | `--tol <eps>` | Stopping tolerance | 1e-4 |
 | `--time-limit <sec>` | Time limit in seconds | 3600 |
 | `--check-iter <N>` | Convergence check interval | 150 |
+| `--cusparse-spmv <true/false>` | Force cuSPARSE-only normal updates | false |
+| `--autotune-verbose <true/false>` | Print fused backend autotune results | false |
+| `--cr <true/false>` | Curtis-Reid prescaling | true |
 | `--ruiz <true/false>` | Ruiz scaling | true |
 | `--pock <true/false>` | Pock-Chambolle scaling | true |
 | `--bc <true/false>` | Bounds/cost scaling | true |
+| `--presolve <true/false>` | Embedded PSLP presolve | true |
 | `-h, --help` | Show help message | - |
 
 ### Language Interface Installation
