@@ -501,6 +501,6 @@ PYBIND11_MODULE(_hprlp_core, m) {
         )pbdoc");
 
     // Constants
-    m.attr("__version__") = "0.1.1";
+    m.attr("__version__") = "0.1.2";
     m.attr("INFINITY") = std::numeric_limits<double>::infinity();
 }

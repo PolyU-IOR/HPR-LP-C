@@ -15,7 +15,7 @@
 #define HPRLP_VERSION_PATCH 0
 
 // Version string
-#define HPRLP_VERSION_STRING "0.1.1"
+#define HPRLP_VERSION_STRING "0.1.2"
 
 // Full version number as integer (MAJOR * 10000 + MINOR * 100 + PATCH)
 #define HPRLP_VERSION_NUMBER 101

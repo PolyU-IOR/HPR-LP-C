@@ -16,7 +16,7 @@ from .modeling import (
 try:
     from ._hprlp_core import __version__
 except ImportError:
-    __version__ = "0.1.1"
+    __version__ = "0.1.2"
 
 __all__ = [
     'HPRLPSolver',

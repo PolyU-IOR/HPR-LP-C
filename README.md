@@ -4,7 +4,7 @@ A C implementation of the Halpern Peaceman--Rachford (HPR) method for solving li
 
 ## Version
 
-Current version: **0.1.1**
+Current version: **0.1.2**
 
 ## Available HPR-LP Implementations
 
