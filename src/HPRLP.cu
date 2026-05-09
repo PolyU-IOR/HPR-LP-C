@@ -81,7 +81,7 @@ static HPRLP_results make_error_result(const char *status) {
 static double compute_maximum_eigenvalue(HPRLP_workspace_gpu *ws, const HPRLP_parameters *params) {
     clock_t t_start = clock();
     
-    std::cout << "ESTIMATING MAXIMUM EIGENVALUE ..." << std::endl;
+    // std::cout << "ESTIMATING MAXIMUM EIGENVALUE ..." << std::endl;
 
     double lambda_max = power_method_cusparse(ws, 5000, 1e-4) * 1.01;
     
@@ -91,7 +91,7 @@ static double compute_maximum_eigenvalue(HPRLP_workspace_gpu *ws, const HPRLP_pa
 
 
     std::cout << "ESTIMATING MAXIMUM EIGENVALUE time = " << std::fixed << std::setprecision(2) << power_time << " seconds" << std::endl;
-    std::cout << "estimated maximum eigenvalue of AAT = " << std::scientific << std::setprecision(2) << lambda_max << std::defaultfloat << std::endl;
+    // std::cout << "estimated maximum eigenvalue of AAT = " << std::scientific << std::setprecision(2) << lambda_max << std::defaultfloat << std::endl;
 
     return power_time;
 }
