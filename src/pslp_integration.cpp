@@ -709,7 +709,6 @@ bool run_embedded_pslp_presolve(const LP_info_cpu *model,
 
     std::cout << "PSLP presolve reduced problem: (" << model->m << ", " << model->n << ") -> ("
               << reduced_model->m << ", " << reduced_model->n << ")" << std::endl;
-    std::cout << "PSLP objective offset: " << (payload.obj_constant - model->obj_constant) << std::endl;
     return true;
 }
 
