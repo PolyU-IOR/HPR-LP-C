@@ -114,6 +114,24 @@ julia --project=../package example_jump.jl
 ```
 
 
+
+## Example 4: Batched shared-A solves
+
+```bash
+cd examples
+julia --project=../package example_batched_lp.jl
+```
+
+Use `solve_batched(A, C, AL, AU, l, u, params)` or `solve_batched(model, C, AL, AU, l, u, params)` when every LP shares the same sparse `A`. `C`, `l`, and `u` are `n x B`; `AL` and `AU` are `m x B`; each column is one LP instance.
+
+```julia
+result = solve_batched(A, C, AL, AU, l, u, params)
+println(result.status)
+println(result.x[:, 1])
+```
+
+---
+
 ## `Parameters`
 Solver configuration options (specified as keyword arguments):
 
@@ -149,3 +167,14 @@ The `Results` object contains solution and performance information after solving
 | `time` | Solve time (seconds) |
 | `iter4`, `iter6`, `iter8` | Iterations to reach 1e-4/1e-6/1e-8 tolerance |
 | `time4`, `time6`, `time8` | Time to reach corresponding tolerance |
+
+
+## `BatchedResults`
+
+| Field | Description |
+|--------|-------------|
+| `status` | Per-instance solver statuses |
+| `x`, `z` | Primal and bound-dual matrices shaped `n x B` |
+| `y` | Dual matrix shaped `m x B` |
+| `primal_obj`, `gap`, `residuals`, `iter` | Per-instance vectors |
+| `time`, `setup_time`, `solve_time`, `power_time` | Batched timing fields |

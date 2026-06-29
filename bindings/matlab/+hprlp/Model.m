@@ -201,6 +201,53 @@ classdef Model < handle
             result.primal_obj = result.primal_obj + obj.obj_constant;
         end
         
+        function result = solve_batched(obj, C, AL, AU, l, u, varargin)
+            %SOLVE_BATCHED Solve LPs that share this model's matrix A
+            %
+            % result = model.solve_batched(C, AL, AU, l, u)
+            % result = model.solve_batched(C, AL, AU, l, u, 'obj_constants', obj, 'params', params)
+            %
+            % C, l, and u are n-by-B. AL and AU are m-by-B. Each column is one LP.
+
+            if obj.handle_ == 0
+                error('HPRLP:InvalidModel', 'Model has been freed');
+            end
+
+            p = inputParser;
+            addParameter(p, 'obj_constants', [], @(x) isempty(x) || isnumeric(x));
+            addParameter(p, 'params', [], @(x) isempty(x) || isa(x, 'hprlp.Parameters'));
+            parse(p, varargin{:});
+
+            B = size(C, 2);
+            if size(C, 1) ~= obj.n || size(l, 1) ~= obj.n || size(u, 1) ~= obj.n || ...
+               size(l, 2) ~= B || size(u, 2) ~= B
+                error('HPRLP:InvalidInput', 'C, l, and u must have size n x batch_size');
+            end
+            if size(AL, 1) ~= obj.m || size(AU, 1) ~= obj.m || ...
+               size(AL, 2) ~= B || size(AU, 2) ~= B
+                error('HPRLP:InvalidInput', 'AL and AU must have size m x batch_size');
+            end
+
+            obj_constants = p.Results.obj_constants;
+            if isempty(obj_constants)
+                obj_constants = [];
+            else
+                obj_constants = obj_constants(:);
+                if length(obj_constants) ~= B
+                    error('HPRLP:InvalidInput', 'obj_constants must have length batch_size');
+                end
+            end
+
+            if isempty(p.Results.params)
+                result_struct = hprlp_mex('solve_batched', obj.handle_, double(C), double(AL), double(AU), double(l), double(u), obj_constants);
+            else
+                params = p.Results.params;
+                result_struct = hprlp_mex('solve_batched', obj.handle_, double(C), double(AL), double(AU), double(l), double(u), obj_constants, params.toStruct());
+            end
+
+            result = hprlp.BatchedResult(result_struct);
+        end
+
         function delete(obj)
             %DELETE Destructor - frees model memory
             %

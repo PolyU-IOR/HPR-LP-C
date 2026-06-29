@@ -174,3 +174,66 @@ class Results:
             elif hasattr(results, key):
                 setattr(results, key, value)
         return results
+
+
+
+class BatchedResults:
+    """Results from batched HPRLP solves sharing one matrix A."""
+
+    def __init__(self):
+        self.status = []
+        self.x = None
+        self.y = None
+        self.z = None
+        self.primal_obj = None
+        self.gap = None
+        self.residuals = None
+        self.iter = None
+        self.time = 0.0
+        self.setup_time = 0.0
+        self.solve_time = 0.0
+        self.power_time = 0.0
+
+    def is_optimal(self) -> bool:
+        return all(s == "OPTIMAL" for s in self.status)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'status': list(self.status),
+            'x': self.x.tolist() if self.x is not None else None,
+            'y': self.y.tolist() if self.y is not None else None,
+            'z': self.z.tolist() if self.z is not None else None,
+            'primal_obj': self.primal_obj.tolist() if self.primal_obj is not None else None,
+            'gap': self.gap.tolist() if self.gap is not None else None,
+            'residuals': self.residuals.tolist() if self.residuals is not None else None,
+            'iter': self.iter.tolist() if self.iter is not None else None,
+            'time': self.time,
+            'setup_time': self.setup_time,
+            'solve_time': self.solve_time,
+            'power_time': self.power_time,
+        }
+
+    @classmethod
+    def from_core_results(cls, core_results):
+        results = cls()
+        B = core_results.batch_size
+        n = core_results.n
+        m = core_results.m
+        results.status = list(core_results.status)
+        results.x = np.array(core_results.x, dtype=np.float64).reshape((n, B), order='F')
+        results.y = np.array(core_results.y, dtype=np.float64).reshape((m, B), order='F')
+        results.z = np.array(core_results.z, dtype=np.float64).reshape((n, B), order='F')
+        results.primal_obj = np.array(core_results.primal_obj, dtype=np.float64)
+        results.gap = np.array(core_results.gap, dtype=np.float64)
+        results.residuals = np.array(core_results.residuals, dtype=np.float64)
+        results.iter = np.array(core_results.iter, dtype=np.int32)
+        results.time = core_results.time
+        results.setup_time = core_results.setup_time
+        results.solve_time = core_results.solve_time
+        results.power_time = core_results.power_time
+        return results
+
+    def __repr__(self):
+        B = len(self.status)
+        max_res = float(np.max(self.residuals)) if self.residuals is not None and B else float('inf')
+        return f"BatchedResults(batch_size={B}, max_residual={max_res:.2e}, time={self.time:.3f}s)"

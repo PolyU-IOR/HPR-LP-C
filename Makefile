@@ -99,6 +99,7 @@ LIB_SOURCES := \
 	$(SRC_DIR)/power_iteration.cu \
 	$(SRC_DIR)/main_iterate.cu \
 	$(SRC_DIR)/HPRLP.cu \
+	$(SRC_DIR)/batched_solver.cu \
 	$(SRC_DIR)/cuda_kernels/HPR_cuda_kernels.cu
 
 PSLP_SOURCES := $(filter-out $(PSLP_DIR)/src/core/Debugger.c,$(wildcard $(PSLP_DIR)/src/core/*.c)) $(wildcard $(PSLP_DIR)/src/explorers/*.c)

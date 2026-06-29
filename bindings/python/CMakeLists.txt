@@ -62,7 +62,12 @@ target_include_directories(_hprlp_core PRIVATE
 )
 
 # Ensure the extension is placed in CMAKE_LIBRARY_OUTPUT_DIRECTORY
-# (setup.py sets this to the wheel staging directory)
+# (setup.py sets this to the wheel staging directory) and can load the
+# bundled libhprlp shared library from the same package directory.
+set_target_properties(_hprlp_core PROPERTIES
+    BUILD_RPATH "\$ORIGIN"
+    INSTALL_RPATH "\$ORIGIN"
+)
 if(DEFINED CMAKE_LIBRARY_OUTPUT_DIRECTORY)
     set_target_properties(_hprlp_core PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"

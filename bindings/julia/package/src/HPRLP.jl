@@ -66,7 +66,7 @@ using SparseArrays
 using LinearAlgebra
 using JuMP
 
-export Model, Parameters, Results, solve, free, is_optimal
+export Model, Parameters, Results, BatchedResults, solve, solve_batched, free, is_optimal
 
 # Include submodules
 include("wrapper.jl")

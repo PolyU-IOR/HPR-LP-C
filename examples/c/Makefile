@@ -57,8 +57,9 @@ LDFLAGS := -Xlinker -rpath -Xlinker $(HPRLP_LIB_DIR)
 # Targets
 EXAMPLE_DIRECT := example_direct_lp
 EXAMPLE_MPS := example_mps_file
+EXAMPLE_BATCHED := example_batched_lp
 
-all: $(EXAMPLE_DIRECT) $(EXAMPLE_MPS)
+all: $(EXAMPLE_DIRECT) $(EXAMPLE_MPS) $(EXAMPLE_BATCHED)
 
 $(EXAMPLE_DIRECT): example_direct_lp.c
 	@echo "Building $(EXAMPLE_DIRECT) (Pure C)..."
@@ -86,8 +87,21 @@ $(EXAMPLE_MPS): example_mps_file.c
 	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIB_DIRS) $(LIBS) $(LDFLAGS)
 	@echo "Built: $@"
 
+$(EXAMPLE_BATCHED): example_batched_lp.c
+	@echo "Building $(EXAMPLE_BATCHED) (Pure C)..."
+	@if [ ! -f $(HPRLP_LIB_DIR)/libhprlp.a ]; then \
+		echo "Error: libhprlp.a not found. Please run 'make' in $(HPRLP_ROOT) first."; \
+		exit 1; \
+	fi
+	@if [ ! -f $(HPRLP_LIB_DIR)/libhprlp.so ]; then \
+		echo "Building shared library..."; \
+		cd $(HPRLP_ROOT) && make shared; \
+	fi
+	@$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIB_DIRS) $(LIBS) $(LDFLAGS)
+	@echo "Built: $@"
+
 clean:
-	@rm -f $(EXAMPLE_DIRECT) $(EXAMPLE_MPS)
+	@rm -f $(EXAMPLE_DIRECT) $(EXAMPLE_MPS) $(EXAMPLE_BATCHED)
 
 run-direct: $(EXAMPLE_DIRECT)
 	@./$(EXAMPLE_DIRECT)
@@ -95,12 +109,18 @@ run-direct: $(EXAMPLE_DIRECT)
 run-mps: $(EXAMPLE_MPS)
 	@./$(EXAMPLE_MPS)
 
-run: $(EXAMPLE_DIRECT) $(EXAMPLE_MPS)
+run-batched: $(EXAMPLE_BATCHED)
+	@./$(EXAMPLE_BATCHED)
+
+run: $(EXAMPLE_DIRECT) $(EXAMPLE_MPS) $(EXAMPLE_BATCHED)
 	@echo "Running example_direct_lp..."
 	@./$(EXAMPLE_DIRECT)
 	@echo ""
 	@echo "Running example_mps_file..."
 	@./$(EXAMPLE_MPS)
+	@echo ""
+	@echo "Running example_batched_lp..."
+	@./$(EXAMPLE_BATCHED)
 
 help:
 	@echo "HPRLP Pure C Examples"
@@ -110,15 +130,17 @@ help:
 	@echo "  make run          - Build and run all examples"
 	@echo "  make run-direct   - Build and run direct LP example"
 	@echo "  make run-mps      - Build and run MPS file example"
+	@echo "  make run-batched  - Build and run batched shared-A example"
 	@echo "  make clean        - Remove all executables"
 	@echo ""
 	@echo "Targets:"
-	@echo "  example_direct_lp   - Demonstrates creating and solving LP from raw arrays (Pure C)"
-	@echo "  example_mps_file    - Demonstrates creating and solving LP from MPS file (Pure C)"
+	@echo "  example_direct_lp  - Solve LP from raw arrays (Pure C)"
+	@echo "  example_mps_file   - Solve LP from MPS file (Pure C)"
+	@echo "  example_batched_lp - Solve a batch sharing one sparse A (Pure C)"
 	@echo ""
 	@echo "Note: These examples use pure C (no C++ features) to demonstrate"
 	@echo "      that the HPRLP API is fully C-compatible."
 	@echo ""
 	@echo "Note: libhprlp.a must be built first (run 'make' in $(HPRLP_ROOT))"
 
-.PHONY: all clean run run-direct run-mps help
+.PHONY: all clean run run-direct run-mps run-batched help

@@ -128,6 +128,24 @@ Solve the LP model.
 
 **Returns:** Result object
 
+
+### Example 3: Batched shared-A solves
+
+```bash
+cd examples
+matlab -batch "example_batched_lp"
+```
+
+Use `hprlp.solve_batched(A, C, AL, AU, l, u, 'params', params)` or `model.solve_batched(C, AL, AU, l, u, ...)` when every LP shares the same sparse `A`. `C`, `l`, and `u` are `n x B`; `AL` and `AU` are `m x B`; each column is one LP instance.
+
+```matlab
+result = hprlp.solve_batched(A, C, AL, AU, l, u, 'params', params);
+disp(result.status);
+disp(result.x(:, 1));
+```
+
+---
+
 ## `hprlp.Parameters`
 Solver configuration:
 - `max_iter` - Maximum iterations (default: 2147483647)
@@ -137,6 +155,7 @@ Solver configuration:
 - `check_iter` - Convergence check interval (default: 150)
 - `CUSPARSE_spmv` - Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: false)
 - `autotune_verbose` - Print backend autotuning diagnostics when fused kernels are enabled (default: false)
+- `use_CR_scaling` - Curtis-Reid prescaling (default: true)
 - `use_Ruiz_scaling` - Ruiz scaling (default: true)
 - `use_Pock_Chambolle_scaling` - Pock-Chambolle scaling (default: true)
 - `use_bc_scaling` - Bounds/cost scaling (default: true)
@@ -187,3 +206,12 @@ Or add this line to your `startup.m` file for automatic loading.
 - NVIDIA GPU with CUDA support
 - CUDA Toolkit (compatible with your MATLAB version)
 - C++ compiler compatible with MATLAB MEX
+
+
+## `hprlp.BatchedResult`
+Batched solution information:
+- `status` - cell array of per-instance statuses
+- `x`, `z` - primal and bound-dual matrices shaped `n x B`
+- `y` - dual matrix shaped `m x B`
+- `primal_obj`, `gap`, `residuals`, `iter` - per-instance vectors
+- `time`, `setup_time`, `solve_time`, `power_time` - batched timing fields

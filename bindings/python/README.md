@@ -108,6 +108,24 @@ Solve the LP model.
 
 ---
 
+
+### Example 3: Batched shared-A solves
+
+```bash
+cd examples
+python example_batched_lp.py
+```
+
+Use `hprlp.solve_batched(A, C, AL, AU, l, u, obj_constants=None, param=None)` when every LP shares the same sparse `A`. `C`, `l`, and `u` must have shape `(n, B)`; `AL` and `AU` must have shape `(m, B)`. Each column is one LP instance. Results are returned as `BatchedResults`, with `x` and `z` shaped `(n, B)` and `y` shaped `(m, B)`.
+
+```python
+result = hprlp.solve_batched(A, C, AL, AU, l, u, param=params)
+print(result.status)
+print(result.x[:, 0])
+```
+
+---
+
 ## `Parameters`
 Solver configuration:
 - `max_iter` - Maximum iterations (default: unlimited)
@@ -135,3 +153,12 @@ Solution information:
 - `time` - Solve time (seconds)
 - `iter4/6/8` - Iterations to reach 1e-4/6/8 tolerance
 - `time4/6/8` - Time to reach tolerance
+
+
+### `BatchedResults`
+Batched solution information:
+- `status` - list of per-instance statuses
+- `x`, `z` - primal and bound-dual matrices shaped `(n, B)`
+- `y` - dual matrix shaped `(m, B)`
+- `primal_obj`, `gap`, `residuals`, `iter` - per-instance vectors
+- `time`, `setup_time`, `solve_time`, `power_time` - batched timing fields

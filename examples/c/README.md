@@ -16,6 +16,12 @@ make example_mps_file
 ./example_mps_file
 ```
 
+**example_batched_lp.c** - Solve a batch of LPs sharing one sparse matrix `A`
+```bash
+make example_batched_lp
+./example_batched_lp
+```
+
 ## Building
 
 Build the HPRLP library first:
@@ -77,6 +83,19 @@ if (result.x != NULL) {
 
 // Free the model
 free_model(model);
+```
+
+
+## Batched Shared-A API
+
+Use `solve_batched` when many LP instances share the same sparse matrix `A` but have different `C`, `AL`, `AU`, `l`, `u`, or objective constants. Dense arrays are column-major: `C`, `l`, and `u` are `n x batch_size`; `AL` and `AU` are `m x batch_size`. Results use the same layout for `x`, `y`, and `z`.
+
+```c
+HPRLP_batched_results result = solve_batched(
+    model, batch_size, C, AL, AU, l, u, obj_constants, &param);
+
+/* x/z are n x batch_size, y is m x batch_size, all column-major. */
+free_batched_results(&result);
 ```
 
 ## `Parameters`

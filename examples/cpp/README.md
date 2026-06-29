@@ -113,3 +113,8 @@ The `Results` object contains solution and performance information after solving
 | `time4`, `time6`, `time8` | Time to reach corresponding tolerance |
 
 See the example source code for complete working implementations.
+
+
+## Batched Shared-A API
+
+C++ users can call the same C-compatible `solve_batched` API from `HPRLP.h`. Use it when several LPs share the same sparse matrix `A` but have different `C`, `AL`, `AU`, `l`, `u`, or objective constants. Dense batched inputs are column-major: `C`, `l`, and `u` are `n x batch_size`; `AL` and `AU` are `m x batch_size`. Free the returned host buffers with `free_batched_results(&result)`.

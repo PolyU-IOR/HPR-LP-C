@@ -150,6 +150,76 @@ public:
     }
 };
 
+class PyBatchedResults {
+public:
+    int m;
+    int n;
+    int batch_size;
+    double time;
+    double setup_time;
+    double solve_time;
+    double power_time;
+    std::vector<double> x;
+    std::vector<double> y;
+    std::vector<double> z;
+    std::vector<double> primal_obj;
+    std::vector<double> residuals;
+    std::vector<double> gap;
+    std::vector<int> iter;
+    std::vector<std::string> status;
+
+    PyBatchedResults()
+        : m(0), n(0), batch_size(0), time(0.0), setup_time(0.0), solve_time(0.0), power_time(0.0) {}
+
+    static PyBatchedResults from_c_struct(const HPRLP_batched_results& result) {
+        PyBatchedResults py_result;
+        py_result.m = result.m;
+        py_result.n = result.n;
+        py_result.batch_size = result.batch_size;
+        py_result.time = result.time;
+        py_result.setup_time = result.setup_time;
+        py_result.solve_time = result.solve_time;
+        py_result.power_time = result.power_time;
+        int nB = result.n * result.batch_size;
+        int mB = result.m * result.batch_size;
+        if (result.x) py_result.x = std::vector<double>(result.x, result.x + nB);
+        if (result.y) py_result.y = std::vector<double>(result.y, result.y + mB);
+        if (result.z) py_result.z = std::vector<double>(result.z, result.z + nB);
+        if (result.primal_obj) py_result.primal_obj = std::vector<double>(result.primal_obj, result.primal_obj + result.batch_size);
+        if (result.residuals) py_result.residuals = std::vector<double>(result.residuals, result.residuals + result.batch_size);
+        if (result.gap) py_result.gap = std::vector<double>(result.gap, result.gap + result.batch_size);
+        if (result.iter) py_result.iter = std::vector<int>(result.iter, result.iter + result.batch_size);
+        if (result.status) {
+            py_result.status.reserve(result.batch_size);
+            for (int k = 0; k < result.batch_size; ++k) {
+                py_result.status.emplace_back(result.status + 64 * k);
+            }
+        }
+        return py_result;
+    }
+
+    py::dict to_dict() const {
+        py::dict d;
+        d["m"] = m;
+        d["n"] = n;
+        d["batch_size"] = batch_size;
+        d["time"] = time;
+        d["setup_time"] = setup_time;
+        d["solve_time"] = solve_time;
+        d["power_time"] = power_time;
+        d["x"] = x;
+        d["y"] = y;
+        d["z"] = z;
+        d["primal_obj"] = primal_obj;
+        d["residuals"] = residuals;
+        d["gap"] = gap;
+        d["iter"] = iter;
+        d["status"] = status;
+        return d;
+    }
+};
+
+
 /**
  * @brief Python wrapper class for LP Model
  */
@@ -269,6 +339,35 @@ PyModel py_create_model_from_mps(const std::string& filename) {
     return py_model;
 }
 
+
+static std::vector<double> copy_matrix_column_major(py::array_t<double> arr, int rows, int cols, const char *name) {
+    auto buf = arr.request();
+    if (buf.ndim != 2 || buf.shape[0] != rows || buf.shape[1] != cols) {
+        throw std::invalid_argument(std::string(name) + " must have shape (" + std::to_string(rows) + ", " + std::to_string(cols) + ")");
+    }
+    std::vector<double> out(static_cast<size_t>(rows) * cols);
+    const char *base = static_cast<const char*>(buf.ptr);
+    for (int j = 0; j < cols; ++j) {
+        for (int i = 0; i < rows; ++i) {
+            out[static_cast<size_t>(j) * rows + i] = *reinterpret_cast<const double*>(base + i * buf.strides[0] + j * buf.strides[1]);
+        }
+    }
+    return out;
+}
+
+static std::vector<double> copy_vector(py::array_t<double> arr, int len, const char *name) {
+    auto buf = arr.request();
+    if (buf.ndim != 1 || buf.shape[0] != len) {
+        throw std::invalid_argument(std::string(name) + " must have length " + std::to_string(len));
+    }
+    std::vector<double> out(len);
+    const char *base = static_cast<const char*>(buf.ptr);
+    for (int i = 0; i < len; ++i) {
+        out[i] = *reinterpret_cast<const double*>(base + i * buf.strides[0]);
+    }
+    return out;
+}
+
 /**
  * @brief Solve model
  */
@@ -307,6 +406,51 @@ PyResults solve_model_py(const PyModel& py_model, const PyParameter* py_param_pt
         free(result.z);
     }
 
+    return py_result;
+}
+
+
+PyBatchedResults solve_batched_model_py(const PyModel& py_model,
+                                        py::array_t<double> C_arr,
+                                        py::array_t<double> AL_arr,
+                                        py::array_t<double> AU_arr,
+                                        py::array_t<double> l_arr,
+                                        py::array_t<double> u_arr,
+                                        py::object obj_constants_obj,
+                                        const PyParameter* py_param_ptr) {
+    if (!py_model.is_valid()) {
+        throw std::invalid_argument("Invalid model: model is null");
+    }
+    auto C_buf = C_arr.request();
+    if (C_buf.ndim != 2 || C_buf.shape[0] != py_model.get_n()) {
+        throw std::invalid_argument("C must have shape (n, batch_size)");
+    }
+    int B = static_cast<int>(C_buf.shape[1]);
+    int n = py_model.get_n();
+    int m = py_model.get_m();
+    std::vector<double> C = copy_matrix_column_major(C_arr, n, B, "C");
+    std::vector<double> AL = copy_matrix_column_major(AL_arr, m, B, "AL");
+    std::vector<double> AU = copy_matrix_column_major(AU_arr, m, B, "AU");
+    std::vector<double> l = copy_matrix_column_major(l_arr, n, B, "l");
+    std::vector<double> u = copy_matrix_column_major(u_arr, n, B, "u");
+    std::vector<double> obj_constants;
+    const double *obj_ptr = nullptr;
+    if (!obj_constants_obj.is_none()) {
+        obj_constants = copy_vector(py::cast<py::array_t<double>>(obj_constants_obj), B, "obj_constants");
+        obj_ptr = obj_constants.data();
+    }
+
+    HPRLP_parameters core_param;
+    HPRLP_parameters* param_ptr = nullptr;
+    if (py_param_ptr != nullptr) {
+        core_param = py_param_ptr->to_c_struct();
+        core_param.use_presolve = false;
+        param_ptr = &core_param;
+    }
+
+    HPRLP_batched_results result = solve_batched(py_model.model_ptr, B, C.data(), AL.data(), AU.data(), l.data(), u.data(), obj_ptr, param_ptr);
+    PyBatchedResults py_result = PyBatchedResults::from_c_struct(result);
+    free_batched_results(&result);
     return py_result;
 }
 
@@ -382,6 +526,25 @@ PYBIND11_MODULE(_hprlp_core, m) {
                    "' iter=" + std::to_string(r.iter) +
                    " time=" + std::to_string(r.time) + "s>";
         });
+
+    py::class_<PyBatchedResults>(m, "BatchedResults", "Results from batched HPRLP solver")
+        .def(py::init<>())
+        .def_readonly("m", &PyBatchedResults::m)
+        .def_readonly("n", &PyBatchedResults::n)
+        .def_readonly("batch_size", &PyBatchedResults::batch_size)
+        .def_readonly("time", &PyBatchedResults::time)
+        .def_readonly("setup_time", &PyBatchedResults::setup_time)
+        .def_readonly("solve_time", &PyBatchedResults::solve_time)
+        .def_readonly("power_time", &PyBatchedResults::power_time)
+        .def_readonly("x", &PyBatchedResults::x)
+        .def_readonly("y", &PyBatchedResults::y)
+        .def_readonly("z", &PyBatchedResults::z)
+        .def_readonly("primal_obj", &PyBatchedResults::primal_obj)
+        .def_readonly("residuals", &PyBatchedResults::residuals)
+        .def_readonly("gap", &PyBatchedResults::gap)
+        .def_readonly("iter", &PyBatchedResults::iter)
+        .def_readonly("status", &PyBatchedResults::status)
+        .def("to_dict", &PyBatchedResults::to_dict);
 
     // Model class
     py::class_<PyModel>(m, "Model", "LP model for HPRLP solver")
@@ -487,6 +650,22 @@ PYBIND11_MODULE(_hprlp_core, m) {
         -------
         Results
             Solver results including solution vectors and statistics
+        )pbdoc");
+
+    m.def("solve_batched", &solve_batched_model_py,
+          py::arg("model"),
+          py::arg("C"),
+          py::arg("AL"),
+          py::arg("AU"),
+          py::arg("l"),
+          py::arg("u"),
+          py::arg("obj_constants") = py::none(),
+          py::arg("param") = nullptr,
+          R"pbdoc(
+        Solve a batch of LPs sharing the same matrix A.
+
+        Dense arrays use shapes C/l/u=(n, B), AL/AU=(m, B).
+        Each column is one LP instance.
         )pbdoc");
 
     m.def("free_model", &free_model_py,

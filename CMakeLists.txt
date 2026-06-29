@@ -122,6 +122,7 @@ set(HPRLP_LIB_SOURCES
     src/power_iteration.cu
     src/main_iterate.cu
     src/HPRLP.cu
+    src/batched_solver.cu
     src/cuda_kernels/HPR_cuda_kernels.cu
 )
 
@@ -225,6 +226,7 @@ set(HPRLP_PUBLIC_HEADERS
     include/scaling.h
     include/power_iteration.h
     include/main_iterate.h
+    include/batched_solver.h
 )
 
 # MPS file solver executable (statically linked for standalone use)

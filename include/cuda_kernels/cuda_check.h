@@ -33,6 +33,15 @@
     }                                                                          \
 }
 
+#define CUSPARSE_CHECK(err)                                                                         \
+    do {                                                                                           \
+        cusparseStatus_t err_ = (err);                                                             \
+        if (err_ != CUSPARSE_STATUS_SUCCESS) {                                                     \
+            std::cerr << "cusparse error " << err_ << " at " << __FILE__ << ":" << __LINE__ << "\n"; \
+            throw std::runtime_error("cusparse error");                                            \
+        }                                                                                          \
+    } while (0)
+
 #define CHECK_CUSOLVER(func)                                                   \
 {                                                                              \
     cusolverStatus_t status = (func);                                          \

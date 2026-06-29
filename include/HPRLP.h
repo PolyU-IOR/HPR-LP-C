@@ -18,6 +18,7 @@
 #include "main_iterate.h"   // Core HPR algorithm
 #include "utils.h"          // Utility functions
 #include "preprocess.h"     // Memory allocation and preprocessing
+#include "batched_solver.h" // Batched shared-A GPU solver
 
 #ifdef __cplusplus
 extern "C" {

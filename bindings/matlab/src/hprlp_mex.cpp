@@ -397,6 +397,159 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     }
     
     // ========================================================================
+    // Command: solve_batched
+    // ========================================================================
+    if (command == "solve_batched") {
+        if (nrhs < 7 || nrhs > 9) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput",
+                             "solve_batched requires 7-9 arguments: command, model_handle, C, AL, AU, l, u, [obj_constants], [param_struct]");
+        }
+
+        if (!mxIsUint64(prhs[1]) || mxGetNumberOfElements(prhs[1]) != 1) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "Model handle must be a uint64 scalar");
+        }
+        uint64_t* ptr = static_cast<uint64_t*>(mxGetData(prhs[1]));
+        LP_info_cpu* model = reinterpret_cast<LP_info_cpu*>(*ptr);
+        if (model == NULL) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "Invalid model handle (NULL pointer)");
+        }
+
+        const mxArray* C_mx = prhs[2];
+        const mxArray* AL_mx = prhs[3];
+        const mxArray* AU_mx = prhs[4];
+        const mxArray* l_mx = prhs[5];
+        const mxArray* u_mx = prhs[6];
+        const mxArray* obj_mx = (nrhs >= 8) ? prhs[7] : NULL;
+
+        const mxArray* dense_inputs[] = {C_mx, AL_mx, AU_mx, l_mx, u_mx};
+        const char* dense_names[] = {"C", "AL", "AU", "l", "u"};
+        for (int a = 0; a < 5; ++a) {
+            if (!mxIsDouble(dense_inputs[a]) || mxIsComplex(dense_inputs[a]) || mxIsSparse(dense_inputs[a])) {
+                mexErrMsgIdAndTxt("HPRLP:InvalidInput", "%s must be a full real double matrix", dense_names[a]);
+            }
+        }
+
+        int m = model->m;
+        int n = model->n;
+        if (mxGetM(C_mx) != static_cast<mwSize>(n)) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "C must have size n x batch_size");
+        }
+        int B = static_cast<int>(mxGetN(C_mx));
+        if (B <= 0) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "batch_size must be positive");
+        }
+        if (mxGetM(AL_mx) != static_cast<mwSize>(m) || mxGetN(AL_mx) != static_cast<mwSize>(B) ||
+            mxGetM(AU_mx) != static_cast<mwSize>(m) || mxGetN(AU_mx) != static_cast<mwSize>(B)) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "AL and AU must have size m x batch_size");
+        }
+        if (mxGetM(l_mx) != static_cast<mwSize>(n) || mxGetN(l_mx) != static_cast<mwSize>(B) ||
+            mxGetM(u_mx) != static_cast<mwSize>(n) || mxGetN(u_mx) != static_cast<mwSize>(B)) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "l and u must have size n x batch_size");
+        }
+
+        double* obj_constants = NULL;
+        if (obj_mx != NULL && !mxIsEmpty(obj_mx)) {
+            if (!mxIsDouble(obj_mx) || mxIsComplex(obj_mx) || mxGetNumberOfElements(obj_mx) != static_cast<mwSize>(B)) {
+                mexErrMsgIdAndTxt("HPRLP:InvalidInput", "obj_constants must be a real double vector of length batch_size");
+            }
+            obj_constants = mxGetPr(obj_mx);
+        }
+
+        HPRLP_parameters* param = nullptr;
+        HPRLP_parameters param_storage;
+        if (nrhs >= 9 && !mxIsEmpty(prhs[8])) {
+            param = &param_storage;
+            const mxArray* param_struct = prhs[8];
+            mxArray* field;
+            if ((field = mxGetField(param_struct, 0, "max_iter")) != NULL) {
+                param->max_iter = getScalarInt(field, "max_iter");
+            }
+            if ((field = mxGetField(param_struct, 0, "stop_tol")) != NULL) {
+                param->stop_tol = getScalarDouble(field, "stop_tol");
+            }
+            if ((field = mxGetField(param_struct, 0, "time_limit")) != NULL) {
+                param->time_limit = getScalarDouble(field, "time_limit");
+            }
+            if ((field = mxGetField(param_struct, 0, "device_number")) != NULL) {
+                param->device_number = getScalarInt(field, "device_number");
+            }
+            if ((field = mxGetField(param_struct, 0, "check_iter")) != NULL) {
+                param->check_iter = getScalarInt(field, "check_iter");
+            }
+            if ((field = mxGetField(param_struct, 0, "CUSPARSE_spmv")) != NULL) {
+                param->CUSPARSE_spmv = getScalarBool(field, "CUSPARSE_spmv");
+            }
+            if ((field = mxGetField(param_struct, 0, "autotune_verbose")) != NULL) {
+                param->autotune_verbose = getScalarBool(field, "autotune_verbose");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_CR_scaling")) != NULL) {
+                param->use_CR_scaling = getScalarBool(field, "use_CR_scaling");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_Ruiz_scaling")) != NULL) {
+                param->use_Ruiz_scaling = getScalarBool(field, "use_Ruiz_scaling");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_Pock_Chambolle_scaling")) != NULL) {
+                param->use_Pock_Chambolle_scaling = getScalarBool(field, "use_Pock_Chambolle_scaling");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_bc_scaling")) != NULL) {
+                param->use_bc_scaling = getScalarBool(field, "use_bc_scaling");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_presolve")) != NULL) {
+                param->use_presolve = getScalarBool(field, "use_presolve");
+            }
+        }
+
+        HPRLP_batched_results result = solve_batched(model, B,
+                                                     mxGetPr(C_mx), mxGetPr(AL_mx), mxGetPr(AU_mx),
+                                                     mxGetPr(l_mx), mxGetPr(u_mx), obj_constants, param);
+
+        const char* field_names[] = {"status", "residuals", "primal_obj", "gap",
+                                     "time", "setup_time", "solve_time", "power_time",
+                                     "iter", "x", "y", "z"};
+        plhs[0] = mxCreateStructMatrix(1, 1, 12, field_names);
+
+        mxArray* status_cell = mxCreateCellMatrix(1, B);
+        for (int k = 0; k < B; ++k) {
+            const char* status = result.status ? result.status + 64 * k : "ERROR";
+            mxSetCell(status_cell, k, mxCreateString(status));
+        }
+        mxSetField(plhs[0], 0, "status", status_cell);
+
+        mxArray* residuals = mxCreateDoubleMatrix(B, 1, mxREAL);
+        mxArray* primal_obj = mxCreateDoubleMatrix(B, 1, mxREAL);
+        mxArray* gap = mxCreateDoubleMatrix(B, 1, mxREAL);
+        mxArray* iter = mxCreateDoubleMatrix(B, 1, mxREAL);
+        if (result.residuals) std::memcpy(mxGetPr(residuals), result.residuals, B * sizeof(double));
+        if (result.primal_obj) std::memcpy(mxGetPr(primal_obj), result.primal_obj, B * sizeof(double));
+        if (result.gap) std::memcpy(mxGetPr(gap), result.gap, B * sizeof(double));
+        double* iter_ptr = mxGetPr(iter);
+        for (int k = 0; k < B; ++k) {
+            iter_ptr[k] = result.iter ? static_cast<double>(result.iter[k]) : 0.0;
+        }
+        mxSetField(plhs[0], 0, "residuals", residuals);
+        mxSetField(plhs[0], 0, "primal_obj", primal_obj);
+        mxSetField(plhs[0], 0, "gap", gap);
+        mxSetField(plhs[0], 0, "iter", iter);
+        mxSetField(plhs[0], 0, "time", mxCreateDoubleScalar(result.time));
+        mxSetField(plhs[0], 0, "setup_time", mxCreateDoubleScalar(result.setup_time));
+        mxSetField(plhs[0], 0, "solve_time", mxCreateDoubleScalar(result.solve_time));
+        mxSetField(plhs[0], 0, "power_time", mxCreateDoubleScalar(result.power_time));
+
+        mxArray* x = mxCreateDoubleMatrix(n, B, mxREAL);
+        mxArray* y = mxCreateDoubleMatrix(m, B, mxREAL);
+        mxArray* z = mxCreateDoubleMatrix(n, B, mxREAL);
+        if (result.x) std::memcpy(mxGetPr(x), result.x, static_cast<size_t>(n) * B * sizeof(double));
+        if (result.y) std::memcpy(mxGetPr(y), result.y, static_cast<size_t>(m) * B * sizeof(double));
+        if (result.z) std::memcpy(mxGetPr(z), result.z, static_cast<size_t>(n) * B * sizeof(double));
+        mxSetField(plhs[0], 0, "x", x);
+        mxSetField(plhs[0], 0, "y", y);
+        mxSetField(plhs[0], 0, "z", z);
+
+        free_batched_results(&result);
+        return;
+    }
+
+    // ========================================================================
     // Command: get_model_info
     // ========================================================================
     if (command == "get_model_info") {
@@ -454,5 +607,5 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
     
     // Unknown command
     mexErrMsgIdAndTxt("HPRLP:InvalidInput",
-                     "Unknown command '%s'. Use 'create_model_from_arrays', 'create_model_from_mps', 'solve', 'get_model_info', or 'free_model'", command.c_str());
+                     "Unknown command '%s'. Use 'create_model_from_arrays', 'create_model_from_mps', 'solve', 'solve_batched', 'get_model_info', or 'free_model'", command.c_str());
 }

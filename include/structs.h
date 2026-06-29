@@ -65,6 +65,31 @@ struct HPRLP_results {
 };
 
 
+struct HPRLP_batched_results {
+    int m = 0;
+    int n = 0;
+    int batch_size = 0;
+
+    // Column-major host arrays: x/z are n x batch_size, y is m x batch_size.
+    HPRLP_FLOAT *x = nullptr;
+    HPRLP_FLOAT *y = nullptr;
+    HPRLP_FLOAT *z = nullptr;
+
+    HPRLP_FLOAT *primal_obj = nullptr;
+    HPRLP_FLOAT *residuals = nullptr;
+    HPRLP_FLOAT *gap = nullptr;
+    int *iter = nullptr;
+
+    // batch_size contiguous status strings, each 64 bytes.
+    char *status = nullptr;
+
+    HPRLP_FLOAT time = 0.0;
+    HPRLP_FLOAT setup_time = 0.0;
+    HPRLP_FLOAT solve_time = 0.0;
+    HPRLP_FLOAT power_time = 0.0;
+};
+
+
 struct CUSPARSE_spmv_A {
     cusparseHandle_t cusparseHandle;
     cusparseOperation_t _operator;

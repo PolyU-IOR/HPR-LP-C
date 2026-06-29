@@ -76,6 +76,7 @@ function __init__()
         lib_handle = Libdl.dlopen(libhprlp)
         Libdl.dlsym(lib_handle, :create_model_from_arrays)
         Libdl.dlsym(lib_handle, :solve)
+        Libdl.dlsym(lib_handle, :solve_batched)
         @info "HPRLP library loaded successfully"
     catch e
         error("Failed to load HPRLP library: $e")
@@ -142,6 +143,24 @@ mutable struct C_HPRLP_results
     x::Ptr{Float64}            # Primal solution array
     y::Ptr{Float64}            # Dual solution array
     z::Ptr{Float64}            # Bound-dual solution array
+end
+
+mutable struct C_HPRLP_batched_results
+    m::Int32
+    n::Int32
+    batch_size::Int32
+    x::Ptr{Float64}
+    y::Ptr{Float64}
+    z::Ptr{Float64}
+    primal_obj::Ptr{Float64}
+    residuals::Ptr{Float64}
+    gap::Ptr{Float64}
+    iter::Ptr{Int32}
+    status::Ptr{UInt8}
+    time::Float64
+    setup_time::Float64
+    solve_time::Float64
+    power_time::Float64
 end
 
 """
@@ -211,6 +230,24 @@ Call C function: free_model
 
 Free an LP model and release memory.
 """
+function c_solve_batched(model_ptr::Ptr{Cvoid}, C::Matrix{Float64}, AL::Matrix{Float64}, AU::Matrix{Float64}, l::Matrix{Float64}, u::Matrix{Float64}, obj_constants::Union{Vector{Float64}, Nothing}, param::Union{C_HPRLP_parameters, Nothing})
+    B = Int32(size(C, 2))
+    obj_ptr = obj_constants === nothing ? C_NULL : pointer(obj_constants)
+    if param === nothing
+        return ccall((:solve_batched, libhprlp), C_HPRLP_batched_results,
+                     (Ptr{Cvoid}, Int32, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Cvoid}),
+                     model_ptr, B, C, AL, AU, l, u, obj_ptr, C_NULL)
+    else
+        return ccall((:solve_batched, libhprlp), C_HPRLP_batched_results,
+                     (Ptr{Cvoid}, Int32, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ptr{Float64}, Ref{C_HPRLP_parameters}),
+                     model_ptr, B, C, AL, AU, l, u, obj_ptr, Ref(param))
+    end
+end
+
+function c_free_batched_results(result::Base.RefValue{C_HPRLP_batched_results})
+    ccall((:free_batched_results, libhprlp), Cvoid, (Ref{C_HPRLP_batched_results},), result)
+end
+
 function c_free_model(model_ptr::Ptr{Cvoid})
     if model_ptr != C_NULL
         ccall((:free_model, libhprlp), Cvoid,

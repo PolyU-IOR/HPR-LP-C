@@ -388,3 +388,92 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
     
     return result
 end
+
+struct BatchedResults
+    x::Matrix{Float64}
+    y::Matrix{Float64}
+    z::Matrix{Float64}
+    status::Vector{String}
+    primal_obj::Vector{Float64}
+    gap::Vector{Float64}
+    residuals::Vector{Float64}
+    iter::Vector{Int}
+    time::Float64
+    setup_time::Float64
+    solve_time::Float64
+    power_time::Float64
+end
+
+function _string_from_status_ptr(ptr::Ptr{UInt8}, k::Int)
+    bytes = unsafe_wrap(Vector{UInt8}, ptr + 64 * (k - 1), 64; own=false)
+    idx = findfirst(==(0x00), bytes)
+    stop = idx === nothing ? 64 : idx - 1
+    return String(bytes[1:stop])
+end
+
+function from_c_struct(c_results::C_HPRLP_batched_results)
+    m = Int(c_results.m)
+    n = Int(c_results.n)
+    B = Int(c_results.batch_size)
+    x = Matrix{Float64}(undef, n, B)
+    y = Matrix{Float64}(undef, m, B)
+    z = Matrix{Float64}(undef, n, B)
+    primal_obj = Vector{Float64}(undef, B)
+    gap = Vector{Float64}(undef, B)
+    residuals = Vector{Float64}(undef, B)
+    iter32 = Vector{Int32}(undef, B)
+    if c_results.x != C_NULL; unsafe_copyto!(pointer(x), c_results.x, n * B); end
+    if c_results.y != C_NULL; unsafe_copyto!(pointer(y), c_results.y, m * B); end
+    if c_results.z != C_NULL; unsafe_copyto!(pointer(z), c_results.z, n * B); end
+    if c_results.primal_obj != C_NULL; unsafe_copyto!(pointer(primal_obj), c_results.primal_obj, B); end
+    if c_results.gap != C_NULL; unsafe_copyto!(pointer(gap), c_results.gap, B); end
+    if c_results.residuals != C_NULL; unsafe_copyto!(pointer(residuals), c_results.residuals, B); end
+    if c_results.iter != C_NULL; unsafe_copyto!(pointer(iter32), c_results.iter, B); end
+    status = c_results.status == C_NULL ? fill("ERROR", B) : [_string_from_status_ptr(c_results.status, k) for k in 1:B]
+    ref = Ref(c_results)
+    c_free_batched_results(ref)
+    return BatchedResults(x, y, z, status, primal_obj, gap, residuals, Int.(iter32),
+                          c_results.time, c_results.setup_time, c_results.solve_time, c_results.power_time)
+end
+
+function solve_batched(model::Model,
+                       C::AbstractMatrix{Float64},
+                       AL::AbstractMatrix{Float64},
+                       AU::AbstractMatrix{Float64},
+                       l::AbstractMatrix{Float64},
+                       u::AbstractMatrix{Float64},
+                       params = nothing;
+                       obj_constants::Union{AbstractVector{Float64}, Nothing}=nothing)
+    model.ptr == C_NULL && error("Cannot solve freed model")
+    B = size(C, 2)
+    size(C) == (model.n, B) || error("C must have size n x B")
+    size(l) == (model.n, B) || error("l must have size n x B")
+    size(u) == (model.n, B) || error("u must have size n x B")
+    size(AL) == (model.m, B) || error("AL must have size m x B")
+    size(AU) == (model.m, B) || error("AU must have size m x B")
+    obj = obj_constants === nothing ? nothing : Vector{Float64}(obj_constants)
+    obj !== nothing && length(obj) != B && error("obj_constants must have length B")
+    c_params = params === nothing ? nothing : to_c_struct(params)
+    c_results = c_solve_batched(model.ptr, Matrix{Float64}(C), Matrix{Float64}(AL), Matrix{Float64}(AU),
+                                Matrix{Float64}(l), Matrix{Float64}(u), obj, c_params)
+    return from_c_struct(c_results)
+end
+
+function solve_batched(A::AbstractMatrix{Float64},
+                       C::AbstractMatrix{Float64},
+                       AL::AbstractMatrix{Float64},
+                       AU::AbstractMatrix{Float64},
+                       l::AbstractMatrix{Float64},
+                       u::AbstractMatrix{Float64},
+                       params = nothing;
+                       obj_constants::Union{AbstractVector{Float64}, Nothing}=nothing)
+    m, n = size(A)
+    model = Model(A, zeros(m), zeros(m), zeros(n), zeros(n), zeros(n))
+    try
+        return solve_batched(model, C, AL, AU, l, u, params; obj_constants=obj_constants)
+    finally
+        free(model)
+    end
+end
+
+is_optimal(result::BatchedResults) = all(==("OPTIMAL"), result.status)

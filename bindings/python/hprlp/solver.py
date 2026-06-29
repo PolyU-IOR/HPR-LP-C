@@ -7,7 +7,7 @@ from typing import Union, Optional, Tuple
 from pathlib import Path
 
 from .parameters import Parameters
-from .results import Results
+from .results import Results, BatchedResults
 
 
 def _ensure_contiguous_int32(arr):
@@ -166,6 +166,38 @@ class HPRLPSolver:
         
         return result
     
+
+    def solve_batched(
+        self,
+        A: Union[np.ndarray, sparse.spmatrix],
+        C: np.ndarray,
+        AL: np.ndarray,
+        AU: np.ndarray,
+        l: np.ndarray,
+        u: np.ndarray,
+        obj_constants: Optional[np.ndarray] = None,
+        param: Optional[Parameters] = None,
+    ) -> BatchedResults:
+        """Solve B LPs with the same A and column-wise C/AL/AU/l/u data."""
+        from .model import Model
+        if param is None:
+            param = self.param
+        C = np.asarray(C, dtype=np.float64)
+        if C.ndim != 2:
+            raise ValueError("C must have shape (n, batch_size)")
+        B = C.shape[1]
+        m, n = A.shape
+        base_AL = np.zeros(m, dtype=np.float64)
+        base_AU = np.zeros(m, dtype=np.float64)
+        base_l = np.zeros(n, dtype=np.float64)
+        base_u = np.zeros(n, dtype=np.float64)
+        base_c = np.zeros(n, dtype=np.float64)
+        model = Model.from_arrays(A, base_AL, base_AU, base_l, base_u, base_c)
+        try:
+            return model.solve_batched(C, AL, AU, l, u, obj_constants=obj_constants, param=param)
+        finally:
+            model.free()
+
     def solve_mps(
         self,
         filename: Union[str, Path],
@@ -298,3 +330,18 @@ def solve_mps(
     """
     solver = HPRLPSolver(param=param)
     return solver.solve_mps(filename)
+
+
+def solve_batched(
+    A: Union[np.ndarray, sparse.spmatrix],
+    C: np.ndarray,
+    AL: np.ndarray,
+    AU: np.ndarray,
+    l: np.ndarray,
+    u: np.ndarray,
+    obj_constants: Optional[np.ndarray] = None,
+    param: Optional[Parameters] = None,
+) -> BatchedResults:
+    """Convenience function for batched shared-A LP solves."""
+    solver = HPRLPSolver(param=param)
+    return solver.solve_batched(A, C, AL, AU, l, u, obj_constants=obj_constants, param=param)

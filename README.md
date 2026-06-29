@@ -84,6 +84,19 @@ See `examples/c(cpp)/README.md` for details on using HPR-LP-C in external projec
 | `--presolve <true/false>` | Embedded PSLP presolve | true |
 | `-h, --help` | Show help message | - |
 
+
+### Batched Shared-A Solves
+
+The C library also exposes `solve_batched` for solving many LPs with the same sparse matrix `A` and different dense data:
+
+```text
+minimize    c_k' x + obj_constants[k]
+subject to  AL_k <= A x <= AU_k
+            l_k <= x <= u_k
+```
+
+Batched dense inputs are column-major: `C`, `l`, and `u` are `n x batch_size`; `AL` and `AU` are `m x batch_size`. The implementation reuses the shared sparse matrix on the GPU and performs batched SpMM, per-batch restart, and per-batch sigma updates. See `examples/c/example_batched_lp.c`, `bindings/python/examples/example_batched_lp.py`, `bindings/julia/examples/example_batched_lp.jl`, and `bindings/matlab/examples/example_batched_lp.m`.
+
 ### Language Interface Installation
 
 **Python (pip only):**

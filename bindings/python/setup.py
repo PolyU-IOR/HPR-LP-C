@@ -7,6 +7,7 @@ import re
 import sys
 import subprocess
 import glob
+import shutil
 import sysconfig
 from pathlib import Path
 from setuptools import setup, Extension
@@ -375,6 +376,48 @@ class CMakeBuild(build_ext):
             ['cmake', '--build', '.'] + build_args,
             cwd=self.build_temp
         )
+
+        # Keep the package-local shared library in sync with the extension.
+        # Editable installs import from the source package directory, where an
+        # older libhprlp.so may already exist. Refresh it so new C API symbols
+        # such as solve_batched are available at runtime.
+        package_dir = extdir.rstrip(os.path.sep)
+        source_package_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hprlp')
+        package_dirs = []
+        for candidate_dir in (package_dir, source_package_dir):
+            if candidate_dir and candidate_dir not in package_dirs:
+                os.makedirs(candidate_dir, exist_ok=True)
+                package_dirs.append(candidate_dir)
+        preferred_libs = [
+            os.path.join(package_dir, 'libhprlp.so'),
+            os.path.join(package_dir, 'libhprlp.dylib'),
+            os.path.join(source_dir, 'lib', 'libhprlp.so'),
+            os.path.join(source_dir, 'lib', 'libhprlp.dylib'),
+        ]
+        lib_patterns = [
+            os.path.join(self.build_temp, '**', 'libhprlp.so'),
+            os.path.join(self.build_temp, '**', 'libhprlp.dylib'),
+        ]
+        lib_candidates = [path for path in preferred_libs if os.path.isfile(path)]
+        for pattern in lib_patterns:
+            lib_candidates.extend(glob.glob(pattern, recursive=True))
+        lib_candidates = [path for path in lib_candidates if os.path.isfile(path)]
+        if lib_candidates:
+            src_lib = lib_candidates[0]
+            for dst_dir in package_dirs:
+                dst_lib = os.path.join(dst_dir, os.path.basename(src_lib))
+                if os.path.abspath(src_lib) != os.path.abspath(dst_lib):
+                    shutil.copy2(src_lib, dst_lib)
+                if dst_lib.endswith('.so'):
+                    soname_link = os.path.join(dst_dir, 'libhprlp.so.0')
+                    if os.path.lexists(soname_link):
+                        os.remove(soname_link)
+                    try:
+                        os.symlink(os.path.basename(dst_lib), soname_link)
+                    except OSError:
+                        shutil.copy2(dst_lib, soname_link)
+        else:
+            raise RuntimeError('Built libhprlp shared library was not found for Python packaging')
 
 
 # Read README for long description

@@ -233,6 +233,35 @@ class Model:
         # Convert to Python Results
         return Results.from_core_results(core_results)
     
+    def solve_batched(
+        self,
+        C: np.ndarray,
+        AL: np.ndarray,
+        AU: np.ndarray,
+        l: np.ndarray,
+        u: np.ndarray,
+        obj_constants: Optional[np.ndarray] = None,
+        param: Optional['Parameter'] = None,
+    ) -> 'BatchedResults':
+        """Solve B LPs that share this model's matrix A.
+
+        Arrays are shaped C/l/u=(n, B) and AL/AU=(m, B); each column is one LP.
+        """
+        from . import _hprlp_core
+        from .results import BatchedResults
+
+        if self._freed:
+            raise RuntimeError("Cannot solve: model has been freed")
+        core_param = param.to_core_param() if param is not None else None
+        C = np.asarray(C, dtype=np.float64)
+        AL = np.asarray(AL, dtype=np.float64)
+        AU = np.asarray(AU, dtype=np.float64)
+        l = np.asarray(l, dtype=np.float64)
+        u = np.asarray(u, dtype=np.float64)
+        obj = None if obj_constants is None else np.asarray(obj_constants, dtype=np.float64)
+        core_results = _hprlp_core.solve_batched(self._core_model, C, AL, AU, l, u, obj, core_param)
+        return BatchedResults.from_core_results(core_results)
+
     def free(self):
         """
         Free the model and release memory.
