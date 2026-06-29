@@ -377,45 +377,53 @@ class CMakeBuild(build_ext):
             cwd=self.build_temp
         )
 
-        # Keep the package-local shared library in sync with the extension.
-        # Editable installs import from the source package directory, where an
-        # older libhprlp.so may already exist. Refresh it so new C API symbols
-        # such as solve_batched are available at runtime.
+        # Keep the source package's shared library in sync with the freshly
+        # built extension artifacts. The wheel staging directory already gets
+        # the correct symlink layout from CMake; rewriting it here can create
+        # a symlink loop that breaks wheel assembly.
         package_dir = extdir.rstrip(os.path.sep)
         source_package_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hprlp')
         package_dirs = []
-        for candidate_dir in (package_dir, source_package_dir):
-            if candidate_dir and candidate_dir not in package_dirs:
-                os.makedirs(candidate_dir, exist_ok=True)
-                package_dirs.append(candidate_dir)
+        if source_package_dir and os.path.abspath(source_package_dir) != os.path.abspath(package_dir):
+            os.makedirs(source_package_dir, exist_ok=True)
+            package_dirs.append(source_package_dir)
         preferred_libs = [
-            os.path.join(package_dir, 'libhprlp.so'),
+            os.path.join(package_dir, 'libhprlp.so.*'),
             os.path.join(package_dir, 'libhprlp.dylib'),
-            os.path.join(source_dir, 'lib', 'libhprlp.so'),
+            os.path.join(source_dir, 'lib', 'libhprlp.so.*'),
             os.path.join(source_dir, 'lib', 'libhprlp.dylib'),
         ]
         lib_patterns = [
-            os.path.join(self.build_temp, '**', 'libhprlp.so'),
+            os.path.join(self.build_temp, '**', 'libhprlp.so.*'),
             os.path.join(self.build_temp, '**', 'libhprlp.dylib'),
         ]
-        lib_candidates = [path for path in preferred_libs if os.path.isfile(path)]
-        for pattern in lib_patterns:
+        lib_candidates = []
+        for pattern in preferred_libs + lib_patterns:
             lib_candidates.extend(glob.glob(pattern, recursive=True))
-        lib_candidates = [path for path in lib_candidates if os.path.isfile(path)]
+        lib_candidates = [
+            path for path in lib_candidates
+            if os.path.isfile(path) and not os.path.islink(path)
+        ]
+        lib_candidates.sort(reverse=True)
         if lib_candidates:
             src_lib = lib_candidates[0]
             for dst_dir in package_dirs:
                 dst_lib = os.path.join(dst_dir, os.path.basename(src_lib))
                 if os.path.abspath(src_lib) != os.path.abspath(dst_lib):
                     shutil.copy2(src_lib, dst_lib)
-                if dst_lib.endswith('.so'):
+                if '.so.' in os.path.basename(dst_lib):
                     soname_link = os.path.join(dst_dir, 'libhprlp.so.0')
+                    linker_name = os.path.join(dst_dir, 'libhprlp.so')
                     if os.path.lexists(soname_link):
                         os.remove(soname_link)
+                    if os.path.lexists(linker_name):
+                        os.remove(linker_name)
                     try:
                         os.symlink(os.path.basename(dst_lib), soname_link)
+                        os.symlink(os.path.basename(soname_link), linker_name)
                     except OSError:
                         shutil.copy2(dst_lib, soname_link)
+                        shutil.copy2(dst_lib, linker_name)
         else:
             raise RuntimeError('Built libhprlp shared library was not found for Python packaging')
 

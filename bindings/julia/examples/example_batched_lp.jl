@@ -3,7 +3,7 @@
 # Example: batched LP solves sharing one sparse matrix A.
 # Each column of C, AL, AU, l, and u defines one LP instance.
 
-push!(LOAD_PATH, joinpath(@__DIR__, ".."))
+push!(LOAD_PATH, joinpath(@__DIR__, "..", "package"))
 
 using HPRLP
 using SparseArrays
