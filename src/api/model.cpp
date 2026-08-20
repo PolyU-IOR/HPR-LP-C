@@ -25,7 +25,8 @@ LP_info_cpu* create_model_from_arrays_with_obj_constant(
     }
 
     // Allocate model structure
-    LP_info_cpu* model = new LP_info_cpu;
+    // Value-initialize every pointer so a parser failure can be cleaned up safely.
+    LP_info_cpu* model = new LP_info_cpu{};
     if (!model) {
         std::cerr << "[error] Failed to allocate model structure" << std::endl;
         return nullptr;

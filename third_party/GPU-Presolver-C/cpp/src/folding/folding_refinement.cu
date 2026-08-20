@@ -59,8 +59,10 @@ void spmv_csr(const presolve::DeviceCsrMatrix& A, const double* x, double* y) {
   cusparseSpMatDescr_t mat = nullptr;
   cusparseDnVecDescr_t x_desc = nullptr;
   cusparseDnVecDescr_t y_desc = nullptr;
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13030
   cusparseSpMVOpDescr_t operation_desc = nullptr;
   cusparseSpMVOpPlan_t operation_plan = nullptr;
+#endif
   void* buffer = nullptr;
   std::size_t buffer_size = 0;
   const double alpha = 1.0;
@@ -84,6 +86,7 @@ void spmv_csr(const presolve::DeviceCsrMatrix& A, const double* x, double* y) {
                           "cusparseCreateDnVec x");
   throw_if_cusparse_error(cusparseCreateDnVec(&y_desc, A.rows, y, CUDA_R_64F),
                           "cusparseCreateDnVec y");
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13030
   throw_if_cusparse_error(
       cusparseSpMVOp_bufferSize(handle,
                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
@@ -114,6 +117,50 @@ void spmv_csr(const presolve::DeviceCsrMatrix& A, const double* x, double* y) {
       "cusparseSpMVOp");
   cusparseSpMVOp_destroyPlan(operation_plan);
   cusparseSpMVOp_destroyDescr(operation_desc);
+#else
+  constexpr cusparseSpMVAlg_t algorithm = CUSPARSE_SPMV_CSR_ALG2;
+  throw_if_cusparse_error(
+      cusparseSpMV_bufferSize(handle,
+                              CUSPARSE_OPERATION_NON_TRANSPOSE,
+                              &alpha,
+                              mat,
+                              x_desc,
+                              &beta,
+                              y_desc,
+                              CUDA_R_64F,
+                              algorithm,
+                              &buffer_size),
+      "cusparseSpMV_bufferSize");
+  if (buffer_size > 0) {
+    throw_if_cuda_error(cudaMalloc(&buffer, buffer_size), "cudaMalloc spmv buffer");
+  }
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 12040
+  throw_if_cusparse_error(
+      cusparseSpMV_preprocess(handle,
+                              CUSPARSE_OPERATION_NON_TRANSPOSE,
+                              &alpha,
+                              mat,
+                              x_desc,
+                              &beta,
+                              y_desc,
+                              CUDA_R_64F,
+                              algorithm,
+                              buffer),
+      "cusparseSpMV_preprocess");
+#endif
+  throw_if_cusparse_error(
+      cusparseSpMV(handle,
+                   CUSPARSE_OPERATION_NON_TRANSPOSE,
+                   &alpha,
+                   mat,
+                   x_desc,
+                   &beta,
+                   y_desc,
+                   CUDA_R_64F,
+                   algorithm,
+                   buffer),
+      "cusparseSpMV");
+#endif
   cudaFree(buffer);
   cusparseDestroyDnVec(x_desc);
   cusparseDestroyDnVec(y_desc);

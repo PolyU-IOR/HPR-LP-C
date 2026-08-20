@@ -132,8 +132,8 @@ CUDA_COMPAT_DIR ?= $(shell for candidate in \
 	$${HOME}/cuda-compat-13.3/usr/local/cuda-13.3/compat; do \
 	if [ -d "$${candidate}" ]; then echo "$${candidate}"; break; fi; done)
 # Use legacy DT_RPATH so an unrelated CUDA entry in LD_LIBRARY_PATH cannot
-# override the toolkit selected at build time. This is required for newer
-# experimental cuSPARSE SpMVOp symbols that are absent from CUDA 12.8.
+# override the toolkit selected at build time. CUDA 13.3+ builds use the newer
+# experimental SpMVOp symbols; older builds use the cusparseSpMV ALG2 fallback.
 CUDA_RPATH_FLAGS := -Xlinker --disable-new-dtags \
 	-Xlinker -rpath -Xlinker $(CUDA_LIB_DIR)
 ifneq ($(strip $(CUDA_COMPAT_DIR)),)

@@ -6,6 +6,7 @@
 #include <math.h>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <iostream>
 #include <string>
 #include <zlib.h>
@@ -39,30 +40,31 @@ FILE* open_mps_stream(const char *filename) {
         return NULL;
     }
 
-    FILE *tmp_fp = tmpfile();
-    if (!tmp_fp) {
+    /* Parse gzip input directly.  The previous implementation first expanded the
+       complete file into tmpfile(), which can require tens of GB for the large
+       Oliver-Hinder models and fail even when the compressed input is valid. */
+    cookie_io_functions_t gzip_io = {};
+    gzip_io.read = [](void *cookie, char *buffer, size_t size) -> ssize_t {
+        gzFile stream = static_cast<gzFile>(cookie);
+        const unsigned int request =
+            static_cast<unsigned int>(std::min<size_t>(size, static_cast<size_t>(INT_MAX)));
+        const int result = gzread(stream, buffer, request);
+        if (result < 0) {
+            errno = EIO;
+            return -1;
+        }
+        return static_cast<ssize_t>(result);
+    };
+    gzip_io.close = [](void *cookie) -> int {
+        return gzclose(static_cast<gzFile>(cookie)) == Z_OK ? 0 : -1;
+    };
+
+    FILE *fp = fopencookie(gz_fp, "r", gzip_io);
+    if (!fp) {
         gzclose(gz_fp);
         return NULL;
     }
-
-    char buffer[65536];
-    int bytes_read = 0;
-    while ((bytes_read = gzread(gz_fp, buffer, sizeof(buffer))) > 0) {
-        const size_t bytes_written = fwrite(buffer, 1, static_cast<size_t>(bytes_read), tmp_fp);
-        if (bytes_written != static_cast<size_t>(bytes_read)) {
-            fclose(tmp_fp);
-            gzclose(gz_fp);
-            return NULL;
-        }
-    }
-
-    const int gz_status = gzclose(gz_fp);
-    if (bytes_read < 0 || gz_status != Z_OK || fseek(tmp_fp, 0, SEEK_SET) != 0) {
-        fclose(tmp_fp);
-        return NULL;
-    }
-
-    return tmp_fp;
+    return fp;
 }
 
 }  // namespace

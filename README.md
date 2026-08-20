@@ -3,9 +3,50 @@
 HPR-LP-C is a GPU-accelerated C/CUDA implementation of the Halpern
 Peaceman--Rachford method for solving linear programming problems.
 
+## Quick start
+
+After downloading the v0.1.3 source archive, run:
+
+```bash
+unzip HPR-LP-C-0.1.3.zip
+cd HPR-LP-C-0.1.3
+
+make
+./build/solve_mps_file -i data_path --tol 1e-6 --time-limit 1000
+```
+
+Once this source tree is published in a Git repository, the equivalent
+Git-based installation is:
+
+```bash
+git clone git@github.com:PolyU-IOR/HPR-LP-C-private.git HPR-LP-C
+cd HPR-LP-C
+make
+./build/solve_mps_file -i data_path --tol 1e-6 --time-limit 1000
+```
+
+The build creates:
+
+- `build/solve_mps_file`;
+- `lib/libhprlp.a`; and
+- `lib/libhprlp.so`.
+
+The Makefile detects the first visible GPU architecture. For reproducible
+builds or a machine without a visible GPU during compilation, specify the
+architecture explicitly:
+
+```bash
+make GPU_SM=90       # NVIDIA H100
+make GPU_SM=100      # NVIDIA B200
+make GPU_SM=89       # NVIDIA Ada
+make GPU_SM=80       # NVIDIA A100
+```
+
+Run `make help` to show all build variables and targets.
+
 Version **0.1.3** adds general, runtime-certified structured-matrix backends
 while preserving the public solver interface and a canonical cuSPARSE
-SpMVOp backend. Backend selection depends on matrix structure and device-side
+backend. Backend selection depends on matrix structure and device-side
 probes, not model names or file paths.
 
 This corrected v0.1.3 source retains the validated bounded 24-update CUDA
@@ -26,7 +67,7 @@ bounded graph accelerates the normal iterations between them.
 - Supports batched LPs that share one sparse constraint matrix.
 - Provides optional Python, Julia, and MATLAB interfaces.
 - Automatically selects eligible CUDA implementations from verified matrix
-  structure; `--cusparse-spmv true` forces the cuSPARSE SpMVOp path.
+  structure; `--cusparse-spmv true` forces the cuSPARSE path.
 - Amortizes normal-iteration launch overhead with a boundary-safe,
   fixed-size CUDA graph batch.
 
@@ -36,22 +77,22 @@ The core solver requires:
 
 - Linux on x86-64;
 - an NVIDIA Turing-or-newer GPU with compute capability 7.5 or newer;
-- NVIDIA CUDA Toolkit 13.3 or newer, including `nvcc`, cuBLAS, cuSOLVER,
+- NVIDIA CUDA Toolkit 12.0 or newer, including `nvcc`, cuBLAS, cuSOLVER,
   cuSPARSE, and the CUDA driver development library;
 - GCC/G++ with C++17 support, supported by the selected CUDA Toolkit
   (GCC 9--12 recommended);
 - GNU Make or CMake 3.18 or newer; and
 - zlib development headers.
 
-### cuSPARSE SpMVOp backend
+### cuSPARSE backend
 
-The solver enables NVIDIA's experimental `cusparseSpMVOp` API at compile time
-and uses `CUSPARSE_SPMVOP_ALG1` for every cuSPARSE matrix-vector operation.
-There is no legacy `cusparseSpMV` fallback. SpMVOp currently accepts CSR
-matrices only with `CUSPARSE_OPERATION_NON_TRANSPOSE`, so HPR-LP keeps explicit
-CSR descriptors and execution plans for both `A` and `A^T` and invokes each in
-non-transpose mode. ALG1 is used because it supports matrix-value updates
-without rebuilding the descriptor or plan.
+With CUDA Toolkit 13.3 or newer, the solver enables NVIDIA's experimental
+`cusparseSpMVOp` API and uses `CUSPARSE_SPMVOP_ALG1`. With CUDA Toolkit 12.x or
+13.0--13.2, the same wrapper automatically falls back at compile time to the
+legacy `cusparseSpMV` API with `CUSPARSE_SPMV_CSR_ALG2`, matching the stable
+ALG2 path used by the earlier HPR-LP-C implementation. No runtime option is
+needed. Both backends keep explicit CSR descriptors for `A` and `A^T` and
+invoke them with `CUSPARSE_OPERATION_NON_TRANSPOSE`.
 
 See NVIDIA's [cuSPARSE SpMVOp API reference](https://docs.nvidia.com/cuda/cusparse/#cusparsespmvop-experimental)
 and [CUDA Toolkit 13.3 release notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/).
@@ -66,46 +107,6 @@ sudo apt-get install -y build-essential cmake zlib1g-dev
 Install the CUDA Toolkit separately using NVIDIA's instructions. If CUDA is
 not installed at `/usr/local/cuda`, set `CUDA_PATH` or `CUDA_HOME`.
 
-## Quick start
-
-After downloading the v0.1.3 source archive, run:
-
-```bash
-unzip HPR-LP-C-0.1.3.zip
-cd HPR-LP-C-0.1.3
-
-make -j"$(nproc)"
-./build/solve_mps_file -i data/model.mps
-```
-
-Once this source tree is published in a Git repository, the equivalent
-Git-based installation is:
-
-```bash
-git clone git@github.com:PolyU-IOR/HPR-LP-C-private.git HPR-LP-C
-cd HPR-LP-C
-make -j"$(nproc)"
-./build/solve_mps_file -i data/model.mps
-```
-
-The build creates:
-
-- `build/solve_mps_file`;
-- `lib/libhprlp.a`; and
-- `lib/libhprlp.so`.
-
-The Makefile detects the first visible GPU architecture. For reproducible
-builds or a machine without a visible GPU during compilation, specify the
-architecture explicitly:
-
-```bash
-make GPU_SM=90 -j"$(nproc)"       # NVIDIA H100
-make GPU_SM=89 -j"$(nproc)"       # NVIDIA Ada
-make GPU_SM=80 -j"$(nproc)"       # NVIDIA A100
-```
-
-Run `make help` to show all build variables and targets.
-
 ## CMake build and installation
 
 ```bash
@@ -114,7 +115,7 @@ cmake -S . -B build-cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc" \
   -DCMAKE_CUDA_ARCHITECTURES=90
-cmake --build build-cmake -j"$(nproc)"
+cmake --build build-cmake
 cmake --install build-cmake --prefix "$HOME/.local"
 ```
 
@@ -138,7 +139,7 @@ Use `--presolver pslp` for the original embedded PSLP path or
 For a Make-based staged installation:
 
 ```bash
-make GPU_SM=90 -j"$(nproc)"
+make GPU_SM=90
 make install PREFIX="$HOME/.local"
 ```
 
@@ -153,14 +154,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH:-}"
 ## Command-line usage
 
 ```bash
-./build/solve_mps_file -h
-
-./build/solve_mps_file \
-  -i problem.mps.gz \
-  --device 0 \
-  --tol 1e-6 \
-  --time-limit 1000 \
-  --check-iter 150
+./build/solve_mps_file -i data_path --tol 1e-6 --time-limit 1000
 ```
 
 | Option | Description | Default |
@@ -168,10 +162,10 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH:-}"
 | `-i`, `--input <path>` | Input `.mps` or `.mps.gz` file | required |
 | `--device <id>` | CUDA device index | `0` |
 | `--max-iter <N>` | Maximum iterations | `INT32_MAX` |
-| `--tol <eps>` | Stopping tolerance | `1e-4` |
-| `--time-limit <sec>` | Time limit in seconds | `3600` |
+| `--tol <eps>` | Stopping tolerance | `1e-6` |
+| `--time-limit <sec>` | Time limit in seconds | `1000` |
 | `--check-iter <N>` | Convergence-check interval | `150` |
-| `--cusparse-spmv <bool>` | Force cuSPARSE SpMVOp normal updates | `false` |
+| `--cusparse-spmv <bool>` | Force cuSPARSE normal updates | `false` |
 | `--autotune-verbose <bool>` | Print backend-selection diagnostics | `false` |
 | `--print-debug-info <bool>` | Print detailed presolve, backend, scaling, restart, and timing diagnostics | `false` |
 | `--cr <bool>` | Curtis--Reid prescaling | `true` |
@@ -180,7 +174,7 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH:-}"
 | `--bc <bool>` | Bounds and cost scaling | `true` |
 | `--presolver <pslp\|gpu\|none>` | Select presolver backend | `gpu` |
 | `--gpu-folding <bool>` | Enable folding for GPU-Presolver-C | `true` |
-| `--reduced-matrix <bool>` | Enable adaptive row/column reduction | `false` |
+| `--reduced-matrix <bool>` | Enable adaptive row/column reduction | `true` |
 
 Boolean values accept `true` or `1`; other values are treated as false.
 
@@ -250,7 +244,7 @@ overridden by their corresponding command-line options.
 Build the core library first, then compile and run the examples:
 
 ```bash
-make GPU_SM=90 -j"$(nproc)"
+make GPU_SM=90
 make -C examples/c GPU_SM=90 run
 make -C examples/cpp GPU_SM=90 run
 ```
@@ -295,7 +289,7 @@ See [`bindings/python/README.md`](bindings/python/README.md).
 Build the shared library first, then instantiate the Julia package:
 
 ```bash
-make GPU_SM=90 -j"$(nproc)"
+make GPU_SM=90
 bash bindings/julia/install.sh
 julia --project=bindings/julia/package \
   bindings/julia/examples/example_direct_lp.jl
@@ -332,7 +326,7 @@ See [`bindings/matlab/README.md`](bindings/matlab/README.md).
 export CUDA_PATH=/usr/local/cuda
 export PATH="$CUDA_PATH/bin:$PATH"
 make clean
-make GPU_SM=90 -j"$(nproc)"
+make GPU_SM=90
 ```
 
 ### Unsupported host compiler
@@ -342,7 +336,7 @@ Select a GCC version supported by your CUDA release:
 ```bash
 sudo apt-get install -y gcc-12 g++-12
 make clean
-make GPU_SM=90 -j"$(nproc)"
+make GPU_SM=90
 ```
 
 ### Shared library not found

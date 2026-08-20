@@ -57,7 +57,7 @@ static void print_usage(const char* prog) {
               << "      --tol <eps>            Stopping tolerance (default: 1e-6)\n"
               << "      --time-limit <sec>     Time limit in seconds (default: 1000)\n"
               << "      --check-iter <N>       Check interval (default: 150)\n"
-              << "      --cusparse-spmv <true/false>  Force cuSPARSE SpMVOp normal updates (default: false)\n"
+              << "      --cusparse-spmv <true/false>  Force cuSPARSE normal updates (default: false)\n"
               << "      --autotune-verbose <true/false>  Print fused backend autotune results (default: false)\n"
               << "      --progress-monitor <true/false>  Sample active-set/direction progress (default: true)\n"
               << "      --progress-control <true/false>  Enable sigma safeguards and phase state (default: true)\n"

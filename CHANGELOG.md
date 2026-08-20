@@ -2,11 +2,17 @@
 
 ## Unreleased
 
-- Replaced every single-vector `cusparseSpMV` call with the CUDA 13.3
-  experimental `cusparseSpMVOp` ALG1 API, including normal iterations,
-  reduced-matrix profiling, power iteration, and GPU presolver folding.
-- Removed the legacy SpMV policy and fallback implementation. The build now
-  requires CUDA Toolkit 13.3, C++17, and a Turing-or-newer target (`sm_75+`).
+- Use the CUDA 13.3 experimental `cusparseSpMVOp` ALG1 API for single-vector
+  sparse operations when it is available. CUDA 12.x and CUDA 13.0--13.2 now
+  compile the same wrapper against `cusparseSpMV` CSR ALG2, including the GPU
+  presolver folding path, so the public build no longer requires CUDA 13.3.
+- Stream `.mps.gz` input directly through zlib instead of expanding the full
+  model into an anonymous temporary file. This removes the tens-of-gigabytes
+  temporary-disk requirement exposed by the large Oliver-Hinder MCF models.
+- Value-initialize model storage before MPS parsing so failed reads can be
+  cleaned up safely instead of freeing uninitialized fields.
+- Simplified the README quick start to the default `make` command and restored
+  the public package and banner version to 0.1.3.
 - Ported the validated ultra-wide movement-norm synchronization fix from
   `HPR-LP-C-private` commit `4922b51`: primal restart movement vectors with at
   least `2^27` elements use the blocking host-result form of the ordinary

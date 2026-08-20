@@ -20,8 +20,11 @@ endif()
 # Find CUDA toolkit
 find_package(CUDAToolkit REQUIRED)
 if(CUDAToolkit_VERSION VERSION_LESS 13.3)
-    message(FATAL_ERROR
-        "HPR-LP-C requires CUDA Toolkit 13.3 or newer for cusparseSpMVOp ALG1")
+    message(STATUS
+        "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMV CSR ALG2 fallback")
+else()
+    message(STATUS
+        "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMVOp ALG1")
 endif()
 find_package(ZLIB REQUIRED)
 find_package(HDF5 QUIET COMPONENTS C)

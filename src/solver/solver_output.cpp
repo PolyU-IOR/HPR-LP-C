@@ -181,7 +181,7 @@ void print_solver_parameters(const HPRLP_parameters *param) {
     if (show_parameter(param, HPRLP_PARAM_STOP_TOL)) std::cout << "  Stopping Tolerance:  " << std::scientific << std::setprecision(1) << param->stop_tol << "\n" << std::defaultfloat;
     if (show_parameter(param, HPRLP_PARAM_TIME_LIMIT)) std::cout << "  Time Limit:          " << std::fixed << std::setprecision(1) << param->time_limit << " seconds\n" << std::defaultfloat;
     if (show_parameter(param, HPRLP_PARAM_CHECK_ITER)) std::cout << "  Check Interval:      " << param->check_iter << " iterations\n";
-    if (show_parameter(param, HPRLP_PARAM_CUSPARSE_SPMV)) std::cout << "  cuSPARSE SpMVOp:     " << (param->CUSPARSE_spmv ? "Forced" : "Auto") << "\n";
+    if (show_parameter(param, HPRLP_PARAM_CUSPARSE_SPMV)) std::cout << "  cuSPARSE SpMV:       " << (param->CUSPARSE_spmv ? "Forced" : "Auto") << "\n";
     if (show_parameter(param, HPRLP_PARAM_AUTOTUNE_VERBOSE)) std::cout << "  Autotune Verbose:    " << (param->autotune_verbose ? "Enabled" : "Disabled") << "\n";
     if (show_parameter(param, HPRLP_PARAM_REDUCED_MATRIX)) std::cout << "  Reduced Matrix:      " << (param->use_reduced_matrix ? "Enabled" : "Disabled") << "\n";
     if (show_parameter(param, HPRLP_PARAM_AUTO_MEMORY_POLICY)) std::cout << "  Auto Memory Policy:  " << (param->auto_reduced_compression_policy ? "Enabled" : "Disabled") << "\n";
