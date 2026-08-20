@@ -89,7 +89,7 @@ end
 C-compatible struct for solver parameters.
 Maps directly to the C struct HPRLP_parameters.
 """
-mutable struct C_HPRLP_parameters
+struct C_HPRLP_parameters
     max_iter::Int32
     stop_tol::Float64
     time_limit::Float64
@@ -97,29 +97,33 @@ mutable struct C_HPRLP_parameters
     check_iter::Int32
     CUSPARSE_spmv::Bool
     autotune_verbose::Bool
+    enable_progress_monitor::Bool
+    enable_progress_control::Bool
+    enable_sigma_rebalance_restart::Bool
+    use_progress_restart_guard::Bool
+    restart_cooldown_checks::Int32
+    debug_restart::Bool
+    debug_sigma::Bool
+    fixed_sigma::Float64
     use_CR_scaling::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
     use_presolve::Bool
-    
-    function C_HPRLP_parameters()
-        new(
-            typemax(Int32),  # max_iter
-            1e-4,            # stop_tol
-            3600.0,          # time_limit
-            0,               # device_number
-            150,             # check_iter
-            false,           # CUSPARSE_spmv
-            false,           # autotune_verbose
-            false,           # use_CR_scaling
-            true,            # use_Ruiz_scaling
-            true,            # use_Pock_Chambolle_scaling
-            true,            # use_bc_scaling
-            true             # use_presolve
-        )
-    end
+    enable_gpu_folding::Bool
+    presolver::Int32
+    use_reduced_matrix::Bool
+    auto_reduced_compression_policy::Bool
+    print_debug_info::Bool
+    specified_parameter_mask::UInt64
 end
+
+C_HPRLP_parameters() = C_HPRLP_parameters(
+    typemax(Int32), 1e-6, 1000.0, 0, 150,
+    false, false,
+    true, true, true, false, 0, false, false, NaN,
+    true, true, true, true, true, true, 1, true, false,
+    false, UInt64(0))
 
 """
     C_HPRLP_results
@@ -127,7 +131,17 @@ end
 C-compatible struct for solver results.
 Maps directly to the C struct HPRLP_results.
 """
-mutable struct C_HPRLP_results
+struct C_HPRLP_time
+    total_time::Float64
+    presolve_time::Float64
+    setup_time::Float64
+    scaling_time::Float64
+    analyze_time::Float64
+    power_iteration_time::Float64
+    solve_time::Float64
+end
+
+struct C_HPRLP_results
     residuals::Float64
     primal_obj::Float64
     gap::Float64
@@ -135,6 +149,8 @@ mutable struct C_HPRLP_results
     time6::Float64
     time8::Float64
     time::Float64
+    folding_time::Float64
+    presolve_time::Float64
     iter4::Int32
     iter6::Int32
     iter8::Int32
@@ -143,9 +159,26 @@ mutable struct C_HPRLP_results
     x::Ptr{Float64}            # Primal solution array
     y::Ptr{Float64}            # Dual solution array
     z::Ptr{Float64}            # Bound-dual solution array
+    timing::C_HPRLP_time
+    interior_percentage::Float64
+    reduced_activation_checks::Int32
+    reduced_active_iterations::Int32
+    reduced_first_iteration::Int32
+    reduced_rebuilds::Int32
+    reduced_build_time::Float64
+    reduced_last_trigger_iteration::Int32
+    reduced_last_free_ratio::Float64
+    reduced_last_trigger_residual::Float64
+    reduced_last_trigger_sigma::Float64
+    reduced_last_free_columns::Int32
+    reduced_active_iteration_ratio::Float64
+    reduced_average_column_ratio::Float64
+    reduced_average_nnz_ratio::Float64
+    reduced_minimum_column_ratio::Float64
+    reduced_minimum_nnz_ratio::Float64
 end
 
-mutable struct C_HPRLP_batched_results
+struct C_HPRLP_batched_results
     m::Int32
     n::Int32
     batch_size::Int32
@@ -193,6 +226,31 @@ function c_create_model_from_arrays(m::Int, n::Int, nnz::Int,
     return model_ptr
 end
 
+function c_create_model_from_arrays_with_obj_constant(
+    m::Int, n::Int, nnz::Int,
+    rowPtr::Vector{Int32}, colIndex::Vector{Int32}, values::Vector{Float64},
+    AL::Vector{Float64}, AU::Vector{Float64},
+    l::Vector{Float64}, u::Vector{Float64},
+    c::Vector{Float64}, obj_constant::Float64,
+    is_csc::Bool,
+)
+    return ccall(
+        (:create_model_from_arrays_with_obj_constant, libhprlp),
+        Ptr{Cvoid},
+        (
+            Int32, Int32, Int32,
+            Ptr{Int32}, Ptr{Int32}, Ptr{Float64},
+            Ptr{Float64}, Ptr{Float64},
+            Ptr{Float64}, Ptr{Float64},
+            Ptr{Float64}, Float64, Bool,
+        ),
+        m, n, nnz,
+        rowPtr, colIndex, values,
+        AL, AU, l, u,
+        c, obj_constant, is_csc,
+    )
+end
+
 """
 Call C function: create_model_from_mps
 
@@ -200,10 +258,11 @@ Create an LP model from MPS file.
 Returns a pointer to LP_info_cpu structure.
 """
 function c_create_model_from_mps(filename::String)
+    read_time = Ref{Cdouble}(0.0)
     model_ptr = ccall((:create_model_from_mps, libhprlp), Ptr{Cvoid},
-                      (Cstring,),
-                      filename)
-    return model_ptr
+                      (Cstring, Ref{Cdouble}),
+                      filename, read_time)
+    return model_ptr, read_time[]
 end
 
 """

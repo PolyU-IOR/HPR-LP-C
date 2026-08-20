@@ -1,0 +1,3133 @@
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/include/gpu_presolver/presolve/presolve_structs.hpp b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/include/gpu_presolver/presolve/presolve_structs.hpp
+index fb3d467..78d1d04 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/include/gpu_presolver/presolve/presolve_structs.hpp
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/include/gpu_presolver/presolve/presolve_structs.hpp
+@@ -186,6 +186,9 @@ struct PostsolveTapeGpu {
+   std::int32_t record_count = 0;
+   std::int32_t index_count = 0;
+   std::int32_t value_count = 0;
++  std::int32_t record_capacity = 0;
++  std::int32_t index_capacity = 0;
++  std::int32_t value_capacity = 0;
+ };
+ 
+ struct PresolveRecordGpu {
+@@ -244,6 +247,7 @@ struct PresolvePlanGpu {
+   bool has_unbounded = false;
+ 
+   bool has_structural_primal_recovery = false;
++  bool tape_gpu_mirrors_cpu = false;
+   StructuralL1PrimalRecoveryStep structural_primal_recovery;
+   PostsolveTape tape;
+   PostsolveTapeGpu tape_gpu;
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/gpu_presolve.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/gpu_presolve.cu
+index b86573e..9b17b6c 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/gpu_presolve.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/gpu_presolve.cu
+@@ -18,7 +18,9 @@
+ #include <cuda_runtime.h>
+ #include <cusparse.h>
+ 
++#include <algorithm>
+ #include <chrono>
++#include <climits>
+ #include <cstdlib>
+ #include <cmath>
+ #include <cstdint>
+@@ -54,6 +56,15 @@ void throw_if_cusparse_error(cusparseStatus_t status, const char* context) {
+                            std::to_string(static_cast<int>(status)));
+ }
+ 
++template <class T>
++cudaError_t compact_cuda_malloc(T** ptr, std::size_t bytes) {
++  return cudaMallocAsync(reinterpret_cast<void**>(ptr), bytes, nullptr);
++}
++
++cudaError_t compact_cuda_free(void* ptr) {
++  return ptr == nullptr ? cudaSuccess : cudaFreeAsync(ptr, nullptr);
++}
++
+ template <typename Cleanup>
+ struct ScopeExit {
+   explicit ScopeExit(Cleanup cleanup_in) : cleanup(std::move(cleanup_in)) {}
+@@ -104,11 +115,11 @@ void inclusive_scan_i32(std::int32_t* values, std::int32_t n, const char* contex
+   }
+   void* temp_storage = nullptr;
+   std::size_t temp_bytes = 0;
+-  auto cleanup = make_scope_exit([&]() { cudaFree(temp_storage); });
++  auto cleanup = make_scope_exit([&]() { compact_cuda_free(temp_storage); });
+   throw_if_cuda_error(
+       cub::DeviceScan::InclusiveSum(temp_storage, temp_bytes, values, values, n),
+       context);
+-  throw_if_cuda_error(cudaMalloc(&temp_storage, temp_bytes), context);
++  throw_if_cuda_error(cudaMallocAsync(&temp_storage, temp_bytes, nullptr), context);
+   throw_if_cuda_error(
+       cub::DeviceScan::InclusiveSum(temp_storage, temp_bytes, values, values, n),
+       context);
+@@ -153,6 +164,15 @@ __global__ void _kernel_globalize_postsolve_tape_gpu(std::int32_t* indices,
+   const std::int32_t idx0 = index_starts[k];
+   const std::int32_t type = types[k];
+   switch (static_cast<PostsolveReductionType>(type)) {
++    case PostsolveReductionType::SubCol: {
++      indices[idx0] = col_red2org[indices[idx0]];
++      indices[idx0 + 1] = row_red2org[indices[idx0 + 1]];
++      const std::int32_t support_count = indices[idx0 + 2];
++      for (std::int32_t t = 0; t < support_count; ++t) {
++        indices[idx0 + 3 + t] = col_red2org[indices[idx0 + 3 + t]];
++      }
++      break;
++    }
+     case PostsolveReductionType::BoundChangeNoRow:
+       indices[idx0] = col_red2org[indices[idx0]];
+       break;
+@@ -309,6 +329,7 @@ __global__ void _kernel_count_compacted_rows(std::int32_t* row_counts_new,
+                                              const std::int32_t* col_old_to_new,
+                                              const std::int32_t* row_ptr,
+                                              const std::int32_t* col_val,
++                                             std::int32_t max_row_nnz,
+                                              std::int32_t m_old) {
+   const std::int32_t row = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+   if (row < m_old) {
+@@ -316,6 +337,9 @@ __global__ void _kernel_count_compacted_rows(std::int32_t* row_counts_new,
+     if (row_new < 0) {
+       return;
+     }
++    if (row_ptr[row + 1] - row_ptr[row] > max_row_nnz) {
++      return;
++    }
+     std::int32_t count = 0;
+     for (std::int32_t p = row_ptr[row]; p < row_ptr[row + 1]; ++p) {
+       if (col_old_to_new[col_val[p]] >= 0) {
+@@ -356,6 +380,7 @@ __global__ void _kernel_copy_compacted_rows(std::int32_t* col_val_new,
+                                             const std::int32_t* row_ptr,
+                                             const std::int32_t* col_val,
+                                             const double* nz_val,
++                                            std::int32_t max_row_nnz,
+                                             std::int32_t m_old) {
+   const std::int32_t row = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+   if (row < m_old) {
+@@ -363,6 +388,9 @@ __global__ void _kernel_copy_compacted_rows(std::int32_t* col_val_new,
+     if (row_new < 0) {
+       return;
+     }
++    if (row_ptr[row + 1] - row_ptr[row] > max_row_nnz) {
++      return;
++    }
+     std::int32_t write = row_ptr_new[row_new];
+     for (std::int32_t p = row_ptr[row]; p < row_ptr[row + 1]; ++p) {
+       const std::int32_t col_new = col_old_to_new[col_val[p]];
+@@ -375,6 +403,188 @@ __global__ void _kernel_copy_compacted_rows(std::int32_t* col_val_new,
+   }
+ }
+ 
++__global__ void _kernel_mark_dense_compact_rows(
++    std::int32_t* selected_scan,
++    const std::int32_t* row_old_to_new,
++    const std::int32_t* row_ptr,
++    std::int32_t dense_threshold,
++    std::int32_t m_old) {
++  const std::int32_t row = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (row < m_old) {
++    selected_scan[row] =
++        row_old_to_new[row] >= 0 && row_ptr[row + 1] - row_ptr[row] > dense_threshold
++            ? 1
++            : 0;
++  }
++}
++
++__global__ void _kernel_pack_dense_compact_rows(
++    std::int32_t* dense_rows,
++    const std::int32_t* selected_scan,
++    std::int32_t m_old) {
++  const std::int32_t row = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (row >= m_old) {
++    return;
++  }
++  const std::int32_t prev_selected = row == 0 ? 0 : selected_scan[row - 1];
++  const std::int32_t out = selected_scan[row] - 1;
++  if (selected_scan[row] != prev_selected && out >= 0) {
++    dense_rows[out] = row;
++  }
++}
++
++__global__ void _kernel_count_compacted_dense_rows_block(
++    std::int32_t* row_counts_new,
++    const std::int32_t* dense_rows,
++    const std::int32_t* row_old_to_new,
++    const std::int32_t* col_old_to_new,
++    const std::int32_t* row_ptr,
++    const std::int32_t* col_val,
++    std::int32_t dense_count) {
++  const std::int32_t dense_idx = static_cast<std::int32_t>(blockIdx.x);
++  if (dense_idx >= dense_count) {
++    return;
++  }
++  const std::int32_t row = dense_rows[dense_idx];
++  const std::int32_t row_new = row_old_to_new[row];
++  std::int32_t local_count = 0;
++  for (std::int32_t p = row_ptr[row] + static_cast<std::int32_t>(threadIdx.x);
++       p < row_ptr[row + 1]; p += static_cast<std::int32_t>(blockDim.x)) {
++    local_count += col_old_to_new[col_val[p]] >= 0 ? 1 : 0;
++  }
++  using BlockReduce = cub::BlockReduce<std::int32_t, GPU_PRESOLVE_THREADS>;
++  __shared__ typename BlockReduce::TempStorage reduce_storage;
++  const std::int32_t count = BlockReduce(reduce_storage).Sum(local_count);
++  if (threadIdx.x == 0) {
++    row_counts_new[row_new] = count;
++  }
++}
++
++__global__ void _kernel_copy_compacted_dense_rows_block(
++    std::int32_t* col_val_new,
++    double* nz_val_new,
++    const std::int32_t* row_ptr_new,
++    const std::int32_t* dense_rows,
++    const std::int32_t* row_old_to_new,
++    const std::int32_t* col_old_to_new,
++    const std::int32_t* row_ptr,
++    const std::int32_t* col_val,
++    const double* nz_val,
++    std::int32_t dense_count) {
++  const std::int32_t dense_idx = static_cast<std::int32_t>(blockIdx.x);
++  if (dense_idx >= dense_count) {
++    return;
++  }
++  const std::int32_t row = dense_rows[dense_idx];
++  const std::int32_t row_new = row_old_to_new[row];
++  using BlockScan = cub::BlockScan<std::int32_t, GPU_PRESOLVE_THREADS>;
++  __shared__ typename BlockScan::TempStorage scan_storage;
++  __shared__ std::int32_t row_write_offset;
++  if (threadIdx.x == 0) {
++    row_write_offset = 0;
++  }
++  __syncthreads();
++  const std::int32_t row_start = row_ptr[row];
++  const std::int32_t row_stop = row_ptr[row + 1];
++  for (std::int32_t chunk = row_start; chunk < row_stop;
++       chunk += GPU_PRESOLVE_THREADS) {
++    const std::int32_t p = chunk + static_cast<std::int32_t>(threadIdx.x);
++    const std::int32_t col_new = p < row_stop ? col_old_to_new[col_val[p]] : -1;
++    const std::int32_t keep = col_new >= 0 ? 1 : 0;
++    std::int32_t prefix = 0;
++    std::int32_t chunk_count = 0;
++    BlockScan(scan_storage).ExclusiveSum(keep, prefix, chunk_count);
++    if (keep != 0) {
++      const std::int32_t write = row_ptr_new[row_new] + row_write_offset + prefix;
++      col_val_new[write] = col_new;
++      nz_val_new[write] = nz_val[p];
++    }
++    __syncthreads();
++    if (threadIdx.x == 0) {
++      row_write_offset += chunk_count;
++    }
++    __syncthreads();
++  }
++}
++
++__global__ void _kernel_count_compacted_rows_block(
++    std::int32_t* row_counts_new,
++    const std::int32_t* row_old_to_new,
++    const std::int32_t* col_old_to_new,
++    const std::int32_t* row_ptr,
++    const std::int32_t* col_val,
++    std::int32_t m_old) {
++  const std::int32_t row = static_cast<std::int32_t>(blockIdx.x);
++  if (row >= m_old) {
++    return;
++  }
++  const std::int32_t row_new = row_old_to_new[row];
++  if (row_new < 0) {
++    return;
++  }
++  std::int32_t local_count = 0;
++  for (std::int32_t p = row_ptr[row] + static_cast<std::int32_t>(threadIdx.x);
++       p < row_ptr[row + 1]; p += static_cast<std::int32_t>(blockDim.x)) {
++    local_count += col_old_to_new[col_val[p]] >= 0 ? 1 : 0;
++  }
++  using BlockReduce = cub::BlockReduce<std::int32_t, GPU_PRESOLVE_THREADS>;
++  __shared__ typename BlockReduce::TempStorage reduce_storage;
++  const std::int32_t count = BlockReduce(reduce_storage).Sum(local_count);
++  if (threadIdx.x == 0) {
++    row_counts_new[row_new] = count;
++  }
++}
++
++__global__ void _kernel_copy_compacted_rows_block(
++    std::int32_t* col_val_new,
++    double* nz_val_new,
++    const std::int32_t* row_ptr_new,
++    const std::int32_t* row_old_to_new,
++    const std::int32_t* col_old_to_new,
++    const std::int32_t* row_ptr,
++    const std::int32_t* col_val,
++    const double* nz_val,
++    std::int32_t m_old) {
++  const std::int32_t row = static_cast<std::int32_t>(blockIdx.x);
++  if (row >= m_old) {
++    return;
++  }
++  const std::int32_t row_new = row_old_to_new[row];
++  if (row_new < 0) {
++    return;
++  }
++  using BlockScan = cub::BlockScan<std::int32_t, GPU_PRESOLVE_THREADS>;
++  __shared__ typename BlockScan::TempStorage scan_storage;
++  __shared__ std::int32_t row_write_offset;
++  if (threadIdx.x == 0) {
++    row_write_offset = 0;
++  }
++  __syncthreads();
++  const std::int32_t row_start = row_ptr[row];
++  const std::int32_t row_stop = row_ptr[row + 1];
++  for (std::int32_t chunk = row_start; chunk < row_stop;
++       chunk += GPU_PRESOLVE_THREADS) {
++    const std::int32_t p = chunk + static_cast<std::int32_t>(threadIdx.x);
++    const std::int32_t col_new =
++        p < row_stop ? col_old_to_new[col_val[p]] : -1;
++    const std::int32_t keep = col_new >= 0 ? 1 : 0;
++    std::int32_t prefix = 0;
++    std::int32_t chunk_count = 0;
++    BlockScan(scan_storage).ExclusiveSum(keep, prefix, chunk_count);
++    if (keep != 0) {
++      const std::int32_t write =
++          row_ptr_new[row_new] + row_write_offset + prefix;
++      col_val_new[write] = col_new;
++      nz_val_new[write] = nz_val[p];
++    }
++    __syncthreads();
++    if (threadIdx.x == 0) {
++      row_write_offset += chunk_count;
++    }
++    __syncthreads();
++  }
++}
++
+ __global__ void _kernel_gather_by_old_to_new(double* dst,
+                                              const double* src,
+                                              const std::int32_t* old_to_new,
+@@ -448,18 +658,26 @@ __global__ void _kernel_count_transpose_rows(std::int32_t* counts,
+ void free_stats(PresolveStatsGpu& stats);
+ void free_plan(PresolvePlanGpu& plan);
+ 
+-void allocate_stats(PresolveStatsGpu& stats, std::int32_t m, std::int32_t n) {
++void allocate_stats(PresolveStatsGpu& stats,
++                    std::int32_t m,
++                    std::int32_t n,
++                    bool need_row_stats,
++                    bool need_col_stats) {
+   try {
+-    throw_if_cuda_error(cudaMalloc(&stats.row_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(m)), "cudaMalloc stats row_nnz");
+-    throw_if_cuda_error(cudaMalloc(&stats.empty_row_mask, static_cast<std::size_t>(m)), "cudaMalloc stats empty_row_mask");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_row_mask, static_cast<std::size_t>(m)), "cudaMalloc stats singleton_row_mask");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_row_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)), "cudaMalloc stats singleton_row_col");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_row_val, sizeof(double) * static_cast<std::size_t>(m)), "cudaMalloc stats singleton_row_val");
+-    throw_if_cuda_error(cudaMalloc(&stats.col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)), "cudaMalloc stats col_nnz");
+-    throw_if_cuda_error(cudaMalloc(&stats.empty_col_mask, static_cast<std::size_t>(n)), "cudaMalloc stats empty_col_mask");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_col_mask, static_cast<std::size_t>(n)), "cudaMalloc stats singleton_col_mask");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_col_row, sizeof(std::int32_t) * static_cast<std::size_t>(n)), "cudaMalloc stats singleton_col_row");
+-    throw_if_cuda_error(cudaMalloc(&stats.singleton_col_val, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc stats singleton_col_val");
++    if (need_row_stats) {
++      throw_if_cuda_error(compact_cuda_malloc(&stats.row_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(m)), "cudaMallocAsync stats row_nnz");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.empty_row_mask, static_cast<std::size_t>(m)), "cudaMallocAsync stats empty_row_mask");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_row_mask, static_cast<std::size_t>(m)), "cudaMallocAsync stats singleton_row_mask");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_row_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)), "cudaMallocAsync stats singleton_row_col");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_row_val, sizeof(double) * static_cast<std::size_t>(m)), "cudaMallocAsync stats singleton_row_val");
++    }
++    if (need_col_stats) {
++      throw_if_cuda_error(compact_cuda_malloc(&stats.col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)), "cudaMallocAsync stats col_nnz");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.empty_col_mask, static_cast<std::size_t>(n)), "cudaMallocAsync stats empty_col_mask");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_col_mask, static_cast<std::size_t>(n)), "cudaMallocAsync stats singleton_col_mask");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_col_row, sizeof(std::int32_t) * static_cast<std::size_t>(n)), "cudaMallocAsync stats singleton_col_row");
++      throw_if_cuda_error(compact_cuda_malloc(&stats.singleton_col_val, sizeof(double) * static_cast<std::size_t>(n)), "cudaMallocAsync stats singleton_col_val");
++    }
+   } catch (...) {
+     free_stats(stats);
+     throw;
+@@ -467,16 +685,16 @@ void allocate_stats(PresolveStatsGpu& stats, std::int32_t m, std::int32_t n) {
+ }
+ 
+ void free_stats(PresolveStatsGpu& stats) {
+-  cudaFree(stats.row_nnz);
+-  cudaFree(stats.empty_row_mask);
+-  cudaFree(stats.singleton_row_mask);
+-  cudaFree(stats.singleton_row_col);
+-  cudaFree(stats.singleton_row_val);
+-  cudaFree(stats.col_nnz);
+-  cudaFree(stats.empty_col_mask);
+-  cudaFree(stats.singleton_col_mask);
+-  cudaFree(stats.singleton_col_row);
+-  cudaFree(stats.singleton_col_val);
++  compact_cuda_free(stats.row_nnz);
++  compact_cuda_free(stats.empty_row_mask);
++  compact_cuda_free(stats.singleton_row_mask);
++  compact_cuda_free(stats.singleton_row_col);
++  compact_cuda_free(stats.singleton_row_val);
++  compact_cuda_free(stats.col_nnz);
++  compact_cuda_free(stats.empty_col_mask);
++  compact_cuda_free(stats.singleton_col_mask);
++  compact_cuda_free(stats.singleton_col_row);
++  compact_cuda_free(stats.singleton_col_val);
+   stats = PresolveStatsGpu{};
+ }
+ 
+@@ -570,16 +788,16 @@ void allocate_plan(PresolvePlanGpu& plan, const LPInfoGpu& lp) {
+   auto after_row_copy = alloc_start;
+   auto after_col_copy = alloc_start;
+   try {
+-    throw_if_cuda_error(cudaMalloc(&plan.keep_row_mask, static_cast<std::size_t>(m)), "cudaMalloc plan keep_row_mask");
+-    throw_if_cuda_error(cudaMalloc(&plan.keep_col_mask, static_cast<std::size_t>(n)), "cudaMalloc plan keep_col_mask");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.keep_row_mask, static_cast<std::size_t>(m)), "cudaMallocAsync plan keep_row_mask");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.keep_col_mask, static_cast<std::size_t>(n)), "cudaMallocAsync plan keep_col_mask");
+     if (profile_alloc) {
+       after_mask_alloc = std::chrono::steady_clock::now();
+     }
+-    throw_if_cuda_error(cudaMalloc(&plan.new_c, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc plan new_c");
+-    throw_if_cuda_error(cudaMalloc(&plan.new_l, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc plan new_l");
+-    throw_if_cuda_error(cudaMalloc(&plan.new_u, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc plan new_u");
+-    throw_if_cuda_error(cudaMalloc(&plan.new_AL, sizeof(double) * static_cast<std::size_t>(m)), "cudaMalloc plan new_AL");
+-    throw_if_cuda_error(cudaMalloc(&plan.new_AU, sizeof(double) * static_cast<std::size_t>(m)), "cudaMalloc plan new_AU");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.new_c, sizeof(double) * static_cast<std::size_t>(n)), "cudaMallocAsync plan new_c");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.new_l, sizeof(double) * static_cast<std::size_t>(n)), "cudaMallocAsync plan new_l");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.new_u, sizeof(double) * static_cast<std::size_t>(n)), "cudaMallocAsync plan new_u");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.new_AL, sizeof(double) * static_cast<std::size_t>(m)), "cudaMallocAsync plan new_AL");
++    throw_if_cuda_error(compact_cuda_malloc(&plan.new_AU, sizeof(double) * static_cast<std::size_t>(m)), "cudaMallocAsync plan new_AU");
+     if (profile_alloc) {
+       after_vector_alloc = std::chrono::steady_clock::now();
+     }
+@@ -640,13 +858,13 @@ void allocate_plan(PresolvePlanGpu& plan, const LPInfoGpu& lp) {
+ void free_plan(PresolvePlanGpu& plan) {
+   const bool profile_alloc = env_enabled("GPUPRESOLVER_PRESOLVE_ALLOC_PROFILE");
+   const auto free_start = std::chrono::steady_clock::now();
+-  cudaFree(plan.keep_row_mask);
+-  cudaFree(plan.keep_col_mask);
+-  cudaFree(plan.new_c);
+-  cudaFree(plan.new_l);
+-  cudaFree(plan.new_u);
+-  cudaFree(plan.new_AL);
+-  cudaFree(plan.new_AU);
++  compact_cuda_free(plan.keep_row_mask);
++  compact_cuda_free(plan.keep_col_mask);
++  compact_cuda_free(plan.new_c);
++  compact_cuda_free(plan.new_l);
++  compact_cuda_free(plan.new_u);
++  compact_cuda_free(plan.new_AL);
++  compact_cuda_free(plan.new_AU);
+   if (plan.has_new_A) {
+     free_device_csr(plan.new_A);
+   }
+@@ -1201,134 +1419,153 @@ PostsolveTapeGpu postsolve_tape_to_gpu(const PostsolveTape& tape, const char* co
+   return out;
+ }
+ 
+-void append_postsolve_tape_gpu(PostsolveTapeGpu& dest, const PostsolveTapeGpu& src) {
+-  if (src.record_count == 0) {
++__global__ void _kernel_copy_offset_starts(std::int32_t* dest,
++                                           const std::int32_t* src,
++                                           std::int32_t count,
++                                           std::int32_t offset) {
++  const std::int32_t k = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (k < count) {
++    dest[k] = offset + src[k];
++  }
++}
++
++std::int32_t grow_tape_capacity(std::int32_t current,
++                                std::int32_t required,
++                                std::int32_t minimum) {
++  std::int64_t capacity = std::max<std::int64_t>(current, minimum);
++  while (capacity < required) {
++    capacity = std::min<std::int64_t>(
++        static_cast<std::int64_t>(INT32_MAX), capacity + capacity / 2 + 1);
++  }
++  return static_cast<std::int32_t>(capacity);
++}
++
++void reserve_postsolve_tape_gpu(PostsolveTapeGpu& tape,
++                                std::int32_t required_records,
++                                std::int32_t required_indices,
++                                std::int32_t required_values) {
++  const std::int32_t current_record_capacity =
++      std::max(tape.record_capacity, tape.record_count);
++  const std::int32_t current_index_capacity =
++      std::max(tape.index_capacity, tape.index_count);
++  const std::int32_t current_value_capacity =
++      std::max(tape.value_capacity, tape.value_count);
++  if (required_records <= current_record_capacity &&
++      required_indices <= current_index_capacity &&
++      required_values <= current_value_capacity) {
++    tape.record_capacity = current_record_capacity;
++    tape.index_capacity = current_index_capacity;
++    tape.value_capacity = current_value_capacity;
+     return;
+   }
+-  if (dest.record_count == 0) {
+-    PostsolveTapeGpu copied;
+-    copied.record_count = src.record_count;
+-    copied.index_count = src.index_count;
+-    copied.value_count = src.value_count;
+-    throw_if_cuda_error(cudaMalloc(&copied.types, sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count)),
+-                        "cudaMalloc append GPU tape types");
+-    throw_if_cuda_error(cudaMalloc(&copied.index_starts, sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1)),
+-                        "cudaMalloc append GPU tape index_starts");
+-    throw_if_cuda_error(cudaMalloc(&copied.value_starts, sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1)),
+-                        "cudaMalloc append GPU tape value_starts");
+-    throw_if_cuda_error(cudaMalloc(&copied.dual_modes, static_cast<std::size_t>(src.record_count)),
+-                        "cudaMalloc append GPU tape dual_modes");
+-    throw_if_cuda_error(cudaMalloc(&copied.indices, sizeof(std::int32_t) * static_cast<std::size_t>(src.index_count)),
+-                        "cudaMalloc append GPU tape indices");
+-    throw_if_cuda_error(cudaMalloc(&copied.vals, sizeof(double) * static_cast<std::size_t>(src.value_count)),
+-                        "cudaMalloc append GPU tape vals");
+-    throw_if_cuda_error(cudaMemcpy(copied.types, src.types, sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count),
++
++  const std::int32_t new_record_capacity =
++      grow_tape_capacity(current_record_capacity, required_records, 1024);
++  const std::int32_t new_index_capacity =
++      grow_tape_capacity(current_index_capacity, required_indices, 4096);
++  const std::int32_t new_value_capacity =
++      grow_tape_capacity(current_value_capacity, required_values, 4096);
++  PostsolveTapeGpu grown;
++  grown.record_count = tape.record_count;
++  grown.index_count = tape.index_count;
++  grown.value_count = tape.value_count;
++  grown.record_capacity = new_record_capacity;
++  grown.index_capacity = new_index_capacity;
++  grown.value_capacity = new_value_capacity;
++  throw_if_cuda_error(cudaMalloc(&grown.types,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(new_record_capacity)),
++                      "cudaMalloc reserve GPU tape types");
++  throw_if_cuda_error(cudaMalloc(&grown.index_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(new_record_capacity + 1)),
++                      "cudaMalloc reserve GPU tape index_starts");
++  throw_if_cuda_error(cudaMalloc(&grown.value_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(new_record_capacity + 1)),
++                      "cudaMalloc reserve GPU tape value_starts");
++  throw_if_cuda_error(cudaMalloc(&grown.dual_modes,
++                                 static_cast<std::size_t>(new_record_capacity)),
++                      "cudaMalloc reserve GPU tape dual_modes");
++  throw_if_cuda_error(cudaMalloc(&grown.indices,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(new_index_capacity)),
++                      "cudaMalloc reserve GPU tape indices");
++  throw_if_cuda_error(cudaMalloc(&grown.vals,
++                                 sizeof(double) * static_cast<std::size_t>(new_value_capacity)),
++                      "cudaMalloc reserve GPU tape vals");
++  if (tape.record_count > 0) {
++    throw_if_cuda_error(cudaMemcpy(grown.types, tape.types,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(tape.record_count),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape types");
+-    throw_if_cuda_error(cudaMemcpy(copied.index_starts, src.index_starts,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1),
++                        "cudaMemcpy reserve GPU tape types");
++    throw_if_cuda_error(cudaMemcpy(grown.index_starts, tape.index_starts,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(tape.record_count + 1),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape index_starts");
+-    throw_if_cuda_error(cudaMemcpy(copied.value_starts, src.value_starts,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1),
++                        "cudaMemcpy reserve GPU tape index_starts");
++    throw_if_cuda_error(cudaMemcpy(grown.value_starts, tape.value_starts,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(tape.record_count + 1),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape value_starts");
+-    throw_if_cuda_error(cudaMemcpy(copied.dual_modes, src.dual_modes, static_cast<std::size_t>(src.record_count),
++                        "cudaMemcpy reserve GPU tape value_starts");
++    throw_if_cuda_error(cudaMemcpy(grown.dual_modes, tape.dual_modes,
++                                   static_cast<std::size_t>(tape.record_count),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape dual_modes");
+-    throw_if_cuda_error(cudaMemcpy(copied.indices, src.indices, sizeof(std::int32_t) * static_cast<std::size_t>(src.index_count),
++                        "cudaMemcpy reserve GPU tape dual_modes");
++  }
++  if (tape.index_count > 0) {
++    throw_if_cuda_error(cudaMemcpy(grown.indices, tape.indices,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(tape.index_count),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape indices");
+-    throw_if_cuda_error(cudaMemcpy(copied.vals, src.vals, sizeof(double) * static_cast<std::size_t>(src.value_count),
++                        "cudaMemcpy reserve GPU tape indices");
++  }
++  if (tape.value_count > 0) {
++    throw_if_cuda_error(cudaMemcpy(grown.vals, tape.vals,
++                                   sizeof(double) * static_cast<std::size_t>(tape.value_count),
+                                    cudaMemcpyDeviceToDevice),
+-                        "cudaMemcpy append GPU tape vals");
+-    dest = std::move(copied);
+-    return;
++                        "cudaMemcpy reserve GPU tape vals");
+   }
++  tape = std::move(grown);
++}
+ 
+-  PostsolveTapeGpu combined;
+-  combined.record_count = dest.record_count + src.record_count;
+-  combined.index_count = dest.index_count + src.index_count;
+-  combined.value_count = dest.value_count + src.value_count;
+-  throw_if_cuda_error(cudaMalloc(&combined.types, sizeof(std::int32_t) * static_cast<std::size_t>(combined.record_count)),
+-                      "cudaMalloc concat GPU tape types");
+-  throw_if_cuda_error(cudaMalloc(&combined.index_starts, sizeof(std::int32_t) * static_cast<std::size_t>(combined.record_count + 1)),
+-                      "cudaMalloc concat GPU tape index_starts");
+-  throw_if_cuda_error(cudaMalloc(&combined.value_starts, sizeof(std::int32_t) * static_cast<std::size_t>(combined.record_count + 1)),
+-                      "cudaMalloc concat GPU tape value_starts");
+-  throw_if_cuda_error(cudaMalloc(&combined.dual_modes, static_cast<std::size_t>(combined.record_count)),
+-                      "cudaMalloc concat GPU tape dual_modes");
+-  throw_if_cuda_error(cudaMalloc(&combined.indices, sizeof(std::int32_t) * static_cast<std::size_t>(combined.index_count)),
+-                      "cudaMalloc concat GPU tape indices");
+-  throw_if_cuda_error(cudaMalloc(&combined.vals, sizeof(double) * static_cast<std::size_t>(combined.value_count)),
+-                      "cudaMalloc concat GPU tape vals");
+-
+-  throw_if_cuda_error(cudaMemcpy(combined.types, dest.types, sizeof(std::int32_t) * static_cast<std::size_t>(dest.record_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape old types");
+-  throw_if_cuda_error(cudaMemcpy(combined.types + dest.record_count, src.types,
++void append_postsolve_tape_gpu(PostsolveTapeGpu& dest, const PostsolveTapeGpu& src) {
++  if (src.record_count == 0) {
++    return;
++  }
++  const std::int32_t old_record_count = dest.record_count;
++  const std::int32_t old_index_count = dest.index_count;
++  const std::int32_t old_value_count = dest.value_count;
++  const std::int32_t new_record_count = old_record_count + src.record_count;
++  const std::int32_t new_index_count = old_index_count + src.index_count;
++  const std::int32_t new_value_count = old_value_count + src.value_count;
++  reserve_postsolve_tape_gpu(dest, new_record_count, new_index_count, new_value_count);
++  throw_if_cuda_error(cudaMemcpy(dest.types + old_record_count, src.types,
+                                  sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count),
+                                  cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape new types");
+-  throw_if_cuda_error(cudaMemcpy(combined.dual_modes, dest.dual_modes, static_cast<std::size_t>(dest.record_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape old dual_modes");
+-  throw_if_cuda_error(cudaMemcpy(combined.dual_modes + dest.record_count, src.dual_modes,
++                      "cudaMemcpy append GPU tape new types");
++  throw_if_cuda_error(cudaMemcpy(dest.dual_modes + old_record_count, src.dual_modes,
+                                  static_cast<std::size_t>(src.record_count),
+                                  cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape new dual_modes");
+-  throw_if_cuda_error(cudaMemcpy(combined.indices, dest.indices, sizeof(std::int32_t) * static_cast<std::size_t>(dest.index_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape old indices");
+-  throw_if_cuda_error(cudaMemcpy(combined.indices + dest.index_count, src.indices,
++                      "cudaMemcpy append GPU tape new dual_modes");
++  if (src.index_count > 0) {
++    throw_if_cuda_error(cudaMemcpy(dest.indices + old_index_count, src.indices,
+                                  sizeof(std::int32_t) * static_cast<std::size_t>(src.index_count),
+                                  cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape new indices");
+-  throw_if_cuda_error(cudaMemcpy(combined.vals, dest.vals, sizeof(double) * static_cast<std::size_t>(dest.value_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape old vals");
+-  throw_if_cuda_error(cudaMemcpy(combined.vals + dest.value_count, src.vals,
++                        "cudaMemcpy append GPU tape new indices");
++  }
++  if (src.value_count > 0) {
++    throw_if_cuda_error(cudaMemcpy(dest.vals + old_value_count, src.vals,
+                                  sizeof(double) * static_cast<std::size_t>(src.value_count),
+                                  cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy concat GPU tape new vals");
+-
+-  std::vector<std::int32_t> starts(static_cast<std::size_t>(combined.record_count + 1));
+-  std::vector<std::int32_t> value_starts(static_cast<std::size_t>(combined.record_count + 1));
+-  if (dest.record_count > 0) {
+-    throw_if_cuda_error(cudaMemcpy(starts.data(), dest.index_starts,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(dest.record_count),
+-                                   cudaMemcpyDeviceToHost),
+-                        "cudaMemcpy concat GPU tape old index_starts");
+-    throw_if_cuda_error(cudaMemcpy(value_starts.data(), dest.value_starts,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(dest.record_count),
+-                                   cudaMemcpyDeviceToHost),
+-                        "cudaMemcpy concat GPU tape old value_starts");
+-  }
+-  std::vector<std::int32_t> src_starts(static_cast<std::size_t>(src.record_count + 1));
+-  std::vector<std::int32_t> src_value_starts(static_cast<std::size_t>(src.record_count + 1));
+-  throw_if_cuda_error(cudaMemcpy(src_starts.data(), src.index_starts,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1),
+-                                 cudaMemcpyDeviceToHost),
+-                      "cudaMemcpy concat GPU tape new index_starts");
+-  throw_if_cuda_error(cudaMemcpy(src_value_starts.data(), src.value_starts,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(src.record_count + 1),
+-                                 cudaMemcpyDeviceToHost),
+-                      "cudaMemcpy concat GPU tape new value_starts");
+-  for (std::int32_t k = 0; k <= src.record_count; ++k) {
+-    starts[static_cast<std::size_t>(dest.record_count + k)] = dest.index_count + src_starts[static_cast<std::size_t>(k)];
+-    value_starts[static_cast<std::size_t>(dest.record_count + k)] =
+-        dest.value_count + src_value_starts[static_cast<std::size_t>(k)];
+-  }
+-  throw_if_cuda_error(cudaMemcpy(combined.index_starts, starts.data(),
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(combined.record_count + 1),
+-                                 cudaMemcpyHostToDevice),
+-                      "cudaMemcpy concat GPU tape combined index_starts");
+-  throw_if_cuda_error(cudaMemcpy(combined.value_starts, value_starts.data(),
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(combined.record_count + 1),
+-                                 cudaMemcpyHostToDevice),
+-                      "cudaMemcpy concat GPU tape combined value_starts");
+-
+-  dest = std::move(combined);
++                        "cudaMemcpy append GPU tape new vals");
++  }
++  const int blocks = (src.record_count + 1 + GPU_PRESOLVE_THREADS - 1) /
++                     GPU_PRESOLVE_THREADS;
++  _kernel_copy_offset_starts<<<blocks, GPU_PRESOLVE_THREADS>>>(
++      dest.index_starts + old_record_count, src.index_starts,
++      src.record_count + 1, old_index_count);
++  _kernel_copy_offset_starts<<<blocks, GPU_PRESOLVE_THREADS>>>(
++      dest.value_starts + old_record_count, src.value_starts,
++      src.record_count + 1, old_value_count);
++  throw_if_cuda_error(cudaGetLastError(), "_kernel_copy_offset_starts");
++  dest.record_count = new_record_count;
++  dest.index_count = new_index_count;
++  dest.value_count = new_value_count;
+ }
+ 
+ void append_globalized_postsolve_tape_gpu(PostsolveTapeGpu& dest,
+@@ -1338,60 +1575,23 @@ void append_globalized_postsolve_tape_gpu(PostsolveTapeGpu& dest,
+   if (src.record_count == 0) {
+     return;
+   }
+-  PostsolveTapeGpu mapped;
+   std::int32_t* row_map_d = nullptr;
+   std::int32_t* col_map_d = nullptr;
+   auto map_guard = make_scope_exit([&]() {
+     cudaFree(row_map_d);
+     cudaFree(col_map_d);
+   });
+-  mapped.record_count = src.record_count;
+-  mapped.index_count = src.index_count;
+-  mapped.value_count = src.value_count;
+-  throw_if_cuda_error(cudaMalloc(&mapped.types, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count)),
+-                      "cudaMalloc globalize GPU tape types");
+-  throw_if_cuda_error(cudaMalloc(&mapped.index_starts, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count + 1)),
+-                      "cudaMalloc globalize GPU tape index_starts");
+-  throw_if_cuda_error(cudaMalloc(&mapped.value_starts, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count + 1)),
+-                      "cudaMalloc globalize GPU tape value_starts");
+-  throw_if_cuda_error(cudaMalloc(&mapped.dual_modes, static_cast<std::size_t>(mapped.record_count)),
+-                      "cudaMalloc globalize GPU tape dual_modes");
+-  throw_if_cuda_error(cudaMalloc(&mapped.indices, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.index_count)),
+-                      "cudaMalloc globalize GPU tape indices");
+-  throw_if_cuda_error(cudaMalloc(&mapped.vals, sizeof(double) * static_cast<std::size_t>(mapped.value_count)),
+-                      "cudaMalloc globalize GPU tape vals");
+-  throw_if_cuda_error(cudaMemcpy(mapped.types, src.types, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape types");
+-  throw_if_cuda_error(cudaMemcpy(mapped.index_starts, src.index_starts,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count + 1),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape index_starts");
+-  throw_if_cuda_error(cudaMemcpy(mapped.value_starts, src.value_starts,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(mapped.record_count + 1),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape value_starts");
+-  throw_if_cuda_error(cudaMemcpy(mapped.dual_modes, src.dual_modes, static_cast<std::size_t>(mapped.record_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape dual_modes");
+-  throw_if_cuda_error(cudaMemcpy(mapped.indices, src.indices, sizeof(std::int32_t) * static_cast<std::size_t>(mapped.index_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape indices");
+-  throw_if_cuda_error(cudaMemcpy(mapped.vals, src.vals, sizeof(double) * static_cast<std::size_t>(mapped.value_count),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy globalize GPU tape vals");
+-
+   row_map_d = copy_host_vector_to_device(row_red2org, "cudaMalloc/copy GPU tape row_red2org");
+   col_map_d = copy_host_vector_to_device(col_red2org, "cudaMalloc/copy GPU tape col_red2org");
+-  const int blocks = (mapped.record_count + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
++  const int blocks = (src.record_count + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+   _kernel_globalize_postsolve_tape_gpu<<<blocks, GPU_PRESOLVE_THREADS>>>(
+-      mapped.indices, mapped.types, mapped.index_starts, row_map_d, col_map_d, mapped.record_count);
++      src.indices, src.types, src.index_starts, row_map_d, col_map_d, src.record_count);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_globalize_postsolve_tape_gpu");
+   cudaFree(row_map_d);
+   row_map_d = nullptr;
+   cudaFree(col_map_d);
+   col_map_d = nullptr;
+-  append_postsolve_tape_gpu(dest, mapped);
++  append_postsolve_tape_gpu(dest, src);
+ }
+ 
+ void update_record_from_plan(PresolveRecordGpu& record,
+@@ -1405,11 +1605,14 @@ void update_record_from_plan(PresolveRecordGpu& record,
+   const auto record_start = std::chrono::steady_clock::now();
+   const bool has_removed_rows = m_new < old_lp.A.rows;
+   const bool has_removed_cols = n_new < old_lp.A.cols;
++  const std::int32_t removed_row_count = has_removed_rows ? (old_lp.A.rows - m_new) : 0;
+   const std::int32_t removed_col_count = has_removed_cols ? (old_lp.A.cols - n_new) : 0;
++  const bool sparse_row_update =
++      has_removed_rows && removed_row_count <= SPARSE_FIXED_BOUND_RECORD_THRESHOLD;
+   const bool sparse_col_update =
+       has_removed_cols && removed_col_count <= SPARSE_FIXED_BOUND_RECORD_THRESHOLD;
+   const bool record_removed_indices = env_enabled("GPUPRESOLVER_RECORD_REMOVED_INDICES");
+-  const std::vector<std::uint8_t> keep_row = has_removed_rows
++  const std::vector<std::uint8_t> keep_row = has_removed_rows && !sparse_row_update
+       ? copy_device_array(plan.keep_row_mask, old_lp.A.rows, "cudaMemcpy record keep_row")
+       : std::vector<std::uint8_t>{};
+   const std::vector<std::uint8_t> keep_col = has_removed_cols && !sparse_col_update
+@@ -1422,6 +1625,7 @@ void update_record_from_plan(PresolveRecordGpu& record,
+   const auto after_old_mapping_copy = std::chrono::steady_clock::now();
+   std::vector<std::int32_t> next_row_red2org;
+   std::vector<std::int32_t> next_col_red2org;
++  std::vector<std::int32_t> removed_local_rows;
+   std::vector<std::int32_t> removed_local_cols;
+   if (has_removed_rows) {
+     next_row_red2org.reserve(static_cast<std::size_t>(m_new));
+@@ -1429,6 +1633,9 @@ void update_record_from_plan(PresolveRecordGpu& record,
+       record.removed_row_idx.reserve(record.removed_row_idx.size() +
+                                      static_cast<std::size_t>(old_lp.A.rows - m_new));
+     }
++    if (sparse_row_update) {
++      removed_local_rows.reserve(static_cast<std::size_t>(removed_row_count));
++    }
+   }
+   if (has_removed_cols) {
+     next_col_red2org.reserve(static_cast<std::size_t>(n_new));
+@@ -1442,12 +1649,36 @@ void update_record_from_plan(PresolveRecordGpu& record,
+   }
+ 
+   if (has_removed_rows) {
+-    for (std::int32_t row = 0; row < old_lp.A.rows; ++row) {
+-      const std::int32_t global = old_row_red2org[static_cast<std::size_t>(row)];
+-      if (keep_row[static_cast<std::size_t>(row)] != std::uint8_t{0}) {
+-        next_row_red2org.push_back(global);
+-      } else if (record_removed_indices) {
+-        record.removed_row_idx.push_back(global);
++    if (sparse_row_update) {
++      removed_local_rows = pack_removed_cols_sparse(plan.keep_row_mask,
++                                                    old_lp.A.rows,
++                                                    removed_row_count,
++                                                    "cudaMemcpy sparse removed rows");
++      std::int32_t range_begin = 0;
++      for (const std::int32_t local_row : removed_local_rows) {
++        if (local_row < range_begin ||
++            local_row >= static_cast<std::int32_t>(old_row_red2org.size())) {
++          continue;
++        }
++        next_row_red2org.insert(next_row_red2org.end(),
++                                old_row_red2org.begin() + range_begin,
++                                old_row_red2org.begin() + local_row);
++        if (record_removed_indices) {
++          record.removed_row_idx.push_back(old_row_red2org[static_cast<std::size_t>(local_row)]);
++        }
++        range_begin = local_row + 1;
++      }
++      next_row_red2org.insert(next_row_red2org.end(),
++                              old_row_red2org.begin() + range_begin,
++                              old_row_red2org.end());
++    } else {
++      for (std::int32_t row = 0; row < old_lp.A.rows; ++row) {
++        const std::int32_t global = old_row_red2org[static_cast<std::size_t>(row)];
++        if (keep_row[static_cast<std::size_t>(row)] != std::uint8_t{0}) {
++          next_row_red2org.push_back(global);
++        } else if (record_removed_indices) {
++          record.removed_row_idx.push_back(global);
++        }
+       }
+     }
+   }
+@@ -1533,10 +1764,12 @@ void update_record_from_plan(PresolveRecordGpu& record,
+     record.tape.dual_modes.insert(record.tape.dual_modes.end(),
+                                   globalized_cpu_tape.dual_modes.begin(),
+                                   globalized_cpu_tape.dual_modes.end());
+-    PostsolveTapeGpu cpu_tape_gpu =
+-        postsolve_tape_to_gpu(globalized_cpu_tape, "cudaMalloc/copy globalized CPU tape to GPU");
+-    append_postsolve_tape_gpu(record.tape_gpu, cpu_tape_gpu);
+-    free_postsolve_tape_gpu(cpu_tape_gpu);
++    if (!plan.tape_gpu_mirrors_cpu) {
++      PostsolveTapeGpu cpu_tape_gpu =
++          postsolve_tape_to_gpu(globalized_cpu_tape, "cudaMalloc/copy globalized CPU tape to GPU");
++      append_postsolve_tape_gpu(record.tape_gpu, cpu_tape_gpu);
++      free_postsolve_tape_gpu(cpu_tape_gpu);
++    }
+   }
+   const auto after_tape = std::chrono::steady_clock::now();
+ 
+@@ -1660,23 +1893,65 @@ DeviceCsrMatrix compact_csr_by_masks_gpu(const DeviceCsrMatrix& A,
+   out.rows = m_new;
+   out.cols = n_new;
+   std::int32_t* row_counts = nullptr;
++  std::int32_t* dense_scan = nullptr;
++  std::int32_t* dense_rows = nullptr;
+   try {
+-    throw_if_cuda_error(cudaMalloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(m_new + 1)),
++    throw_if_cuda_error(compact_cuda_malloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(m_new + 1)),
+                         "cudaMalloc compact rowPtr");
+     if (m_new == 0 || n_new == 0) {
+       throw_if_cuda_error(cudaMemset(out.rowPtr, 0, sizeof(std::int32_t) * static_cast<std::size_t>(m_new + 1)),
+                           "cudaMemset empty compact rowPtr");
+       return out;
+     }
+-    throw_if_cuda_error(cudaMalloc(&row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(m_new)),
++    throw_if_cuda_error(compact_cuda_malloc(&row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(m_new)),
+                         "cudaMalloc compact row_counts");
+     throw_if_cuda_error(cudaMemset(row_counts, 0, sizeof(std::int32_t) * static_cast<std::size_t>(m_new)),
+                         "cudaMemset compact row_counts");
+     constexpr int threads = 256;
+     const int old_row_blocks = (A.rows + threads - 1) / threads;
+-    _kernel_count_compacted_rows<<<old_row_blocks, threads>>>(
+-        row_counts, row_old_to_new, col_old_to_new, A.rowPtr, A.colVal, A.rows);
+-    throw_if_cuda_error(cudaGetLastError(), "_kernel_count_compacted_rows");
++    const bool use_block_per_row =
++        static_cast<std::int64_t>(A.nnz) >
++        8LL * static_cast<std::int64_t>(A.rows);
++    constexpr std::int32_t dense_threshold = 32;
++    std::int32_t dense_count = 0;
++    if (use_block_per_row) {
++      _kernel_count_compacted_rows_block<<<A.rows, threads>>>(
++          row_counts, row_old_to_new, col_old_to_new, A.rowPtr, A.colVal, A.rows);
++      throw_if_cuda_error(cudaGetLastError(),
++                          "_kernel_count_compacted_rows_block");
++    } else {
++      throw_if_cuda_error(compact_cuda_malloc(
++                              &dense_scan,
++                              sizeof(std::int32_t) * static_cast<std::size_t>(A.rows)),
++                          "cudaMalloc compact dense_scan");
++      _kernel_mark_dense_compact_rows<<<old_row_blocks, threads>>>(
++          dense_scan, row_old_to_new, A.rowPtr, dense_threshold, A.rows);
++      throw_if_cuda_error(cudaGetLastError(), "_kernel_mark_dense_compact_rows");
++      inclusive_scan_i32(dense_scan, A.rows, "cub inclusive scan dense compact rows");
++      throw_if_cuda_error(cudaMemcpy(&dense_count, dense_scan + A.rows - 1,
++                                     sizeof(std::int32_t), cudaMemcpyDeviceToHost),
++                          "cudaMemcpy compact dense row count");
++      if (dense_count > 0) {
++        throw_if_cuda_error(compact_cuda_malloc(
++                                &dense_rows,
++                                sizeof(std::int32_t) * static_cast<std::size_t>(dense_count)),
++                            "cudaMalloc compact dense_rows");
++        _kernel_pack_dense_compact_rows<<<old_row_blocks, threads>>>(
++            dense_rows, dense_scan, A.rows);
++        throw_if_cuda_error(cudaGetLastError(), "_kernel_pack_dense_compact_rows");
++      }
++      _kernel_count_compacted_rows<<<old_row_blocks, threads>>>(
++          row_counts, row_old_to_new, col_old_to_new, A.rowPtr, A.colVal,
++          dense_threshold, A.rows);
++      throw_if_cuda_error(cudaGetLastError(), "_kernel_count_compacted_rows");
++      if (dense_count > 0) {
++        _kernel_count_compacted_dense_rows_block<<<dense_count, threads>>>(
++            row_counts, dense_rows, row_old_to_new, col_old_to_new,
++            A.rowPtr, A.colVal, dense_count);
++        throw_if_cuda_error(cudaGetLastError(),
++                            "_kernel_count_compacted_dense_rows_block");
++      }
++    }
+     inclusive_scan_i32(row_counts, m_new, "cub inclusive scan compact");
+     std::int32_t nnz_new = 0;
+     throw_if_cuda_error(cudaMemcpy(&nnz_new, row_counts + m_new - 1, sizeof(std::int32_t), cudaMemcpyDeviceToHost),
+@@ -1686,19 +1961,40 @@ DeviceCsrMatrix compact_csr_by_masks_gpu(const DeviceCsrMatrix& A,
+     _kernel_row_ptr_from_prefix<<<new_row_blocks, threads>>>(out.rowPtr, row_counts, m_new);
+     throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix compact");
+     if (nnz_new > 0) {
+-      throw_if_cuda_error(cudaMalloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
++      throw_if_cuda_error(compact_cuda_malloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
+                           "cudaMalloc compact colVal");
+-      throw_if_cuda_error(cudaMalloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
++      throw_if_cuda_error(compact_cuda_malloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
+                           "cudaMalloc compact nzVal");
+-      _kernel_copy_compacted_rows<<<old_row_blocks, threads>>>(
+-          out.colVal, out.nzVal, out.rowPtr, row_old_to_new, col_old_to_new,
+-          A.rowPtr, A.colVal, A.nzVal, A.rows);
+-      throw_if_cuda_error(cudaGetLastError(), "_kernel_copy_compacted_rows");
++      if (use_block_per_row) {
++        _kernel_copy_compacted_rows_block<<<A.rows, threads>>>(
++            out.colVal, out.nzVal, out.rowPtr, row_old_to_new, col_old_to_new,
++            A.rowPtr, A.colVal, A.nzVal, A.rows);
++        throw_if_cuda_error(cudaGetLastError(),
++                            "_kernel_copy_compacted_rows_block");
++      } else {
++        _kernel_copy_compacted_rows<<<old_row_blocks, threads>>>(
++            out.colVal, out.nzVal, out.rowPtr, row_old_to_new, col_old_to_new,
++            A.rowPtr, A.colVal, A.nzVal, dense_threshold, A.rows);
++        throw_if_cuda_error(cudaGetLastError(), "_kernel_copy_compacted_rows");
++        if (dense_count > 0) {
++          _kernel_copy_compacted_dense_rows_block<<<dense_count, threads>>>(
++              out.colVal, out.nzVal, out.rowPtr, dense_rows, row_old_to_new,
++              col_old_to_new, A.rowPtr, A.colVal, A.nzVal, dense_count);
++          throw_if_cuda_error(cudaGetLastError(),
++                              "_kernel_copy_compacted_dense_rows_block");
++        }
++      }
+     }
+-    cudaFree(row_counts);
++    compact_cuda_free(row_counts);
+     row_counts = nullptr;
++    compact_cuda_free(dense_scan);
++    dense_scan = nullptr;
++    compact_cuda_free(dense_rows);
++    dense_rows = nullptr;
+   } catch (...) {
+-    cudaFree(row_counts);
++    compact_cuda_free(row_counts);
++    compact_cuda_free(dense_scan);
++    compact_cuda_free(dense_rows);
+     free_device_csr(out);
+     throw;
+   }
+@@ -2039,12 +2335,12 @@ GpuPresolveSummary run_gpu_presolve_impl(const LPInfoGpu& lp,
+     auto plan_guard = make_scope_exit([&]() { free_plan(plan); });
+     auto stats_guard = make_scope_exit([&]() { free_stats(stats); });
+     allocate_plan(plan, current.lp);
+-    allocate_stats(stats, current.lp.A.rows, current.lp.A.cols);
+     const bool needs_row_stats =
+         (empty_rows && params.enable_empty_rows) ||
+         (singleton_rows && params.enable_singleton_rows) ||
+         (activity_checks && params.enable_activity_checks) ||
+         (primal_propagation && params.enable_primal_propagation);
++    allocate_stats(stats, current.lp.A.rows, current.lp.A.cols, needs_row_stats, false);
+     if (needs_row_stats) {
+       recompute_row_stats_from_csr(stats, current.lp);
+     }
+@@ -2132,11 +2428,11 @@ GpuPresolveSummary run_gpu_presolve_impl(const LPInfoGpu& lp,
+     auto plan_guard = make_scope_exit([&]() { free_plan(plan); });
+     auto stats_guard = make_scope_exit([&]() { free_stats(stats); });
+     allocate_plan(plan, current.lp);
+-    allocate_stats(stats, current.lp.A.rows, current.lp.A.cols);
+     const bool needs_col_stats =
+         (empty_cols && params.enable_empty_cols) ||
+         (singleton_cols_dual && params.enable_singleton_cols_dual_infer) ||
+         (singleton_cols_eq && params.enable_singleton_cols_eq);
++    allocate_stats(stats, current.lp.A.rows, current.lp.A.cols, false, needs_col_stats);
+     if (needs_col_stats) {
+       recompute_col_stats_from_csr(stats, current.lp);
+     }
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/presolve_structs.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/presolve_structs.cu
+index 204075d..7731465 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/presolve_structs.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/presolve_structs.cu
+@@ -19,7 +19,10 @@ PostsolveTapeGpu::PostsolveTapeGpu(PostsolveTapeGpu&& other) noexcept
+       vals(std::exchange(other.vals, nullptr)),
+       record_count(std::exchange(other.record_count, 0)),
+       index_count(std::exchange(other.index_count, 0)),
+-      value_count(std::exchange(other.value_count, 0)) {}
++      value_count(std::exchange(other.value_count, 0)),
++      record_capacity(std::exchange(other.record_capacity, 0)),
++      index_capacity(std::exchange(other.index_capacity, 0)),
++      value_capacity(std::exchange(other.value_capacity, 0)) {}
+ 
+ PostsolveTapeGpu& PostsolveTapeGpu::operator=(PostsolveTapeGpu&& other) noexcept {
+   if (this == &other) {
+@@ -35,16 +38,19 @@ PostsolveTapeGpu& PostsolveTapeGpu::operator=(PostsolveTapeGpu&& other) noexcept
+   record_count = std::exchange(other.record_count, 0);
+   index_count = std::exchange(other.index_count, 0);
+   value_count = std::exchange(other.value_count, 0);
++  record_capacity = std::exchange(other.record_capacity, 0);
++  index_capacity = std::exchange(other.index_capacity, 0);
++  value_capacity = std::exchange(other.value_capacity, 0);
+   return *this;
+ }
+ 
+ void PostsolveTapeGpu::reset() noexcept {
+-  cudaFree(types);
+-  cudaFree(index_starts);
+-  cudaFree(value_starts);
+-  cudaFree(dual_modes);
+-  cudaFree(indices);
+-  cudaFree(vals);
++  if (types != nullptr) cudaFreeAsync(types, nullptr);
++  if (index_starts != nullptr) cudaFreeAsync(index_starts, nullptr);
++  if (value_starts != nullptr) cudaFreeAsync(value_starts, nullptr);
++  if (dual_modes != nullptr) cudaFreeAsync(dual_modes, nullptr);
++  if (indices != nullptr) cudaFreeAsync(indices, nullptr);
++  if (vals != nullptr) cudaFreeAsync(vals, nullptr);
+   types = nullptr;
+   index_starts = nullptr;
+   value_starts = nullptr;
+@@ -54,6 +60,9 @@ void PostsolveTapeGpu::reset() noexcept {
+   record_count = 0;
+   index_count = 0;
+   value_count = 0;
++  record_capacity = 0;
++  index_capacity = 0;
++  value_capacity = 0;
+ }
+ 
+ static_assert(sizeof(std::uint8_t) == 1, "Julia UInt8 masks must map to one-byte C++ masks");
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_doubleton_eq.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_doubleton_eq.cu
+index 5c77a1f..7a69c01 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_doubleton_eq.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_doubleton_eq.cu
+@@ -2,6 +2,7 @@
+ 
+ #include <cub/cub.cuh>
+ #include <cuda_runtime.h>
++#include <cusparse.h>
+ #include <thrust/device_ptr.h>
+ #include <thrust/sort.h>
+ 
+@@ -21,6 +22,8 @@ namespace {
+ constexpr int GPU_PRESOLVE_THREADS = 256;
+ constexpr int DOUBLETONEQ_BATCH_MATCHING_ROUNDS = 8;
+ constexpr int DOUBLETONEQ_BATCH_INNER_ROUNDS = 1024;
++constexpr int DOUBLETONEQ_TAPE_INDEX_STRIDE = 3;
++constexpr int DOUBLETONEQ_TAPE_VALUE_STRIDE = 12;
+ constexpr double DOUBLETONEQ_MAX_RATIO_PIVOT = 1.0e3;
+ // Avoid the per-row selection sort when rebuilding AT inside doubleton batches.
+ // It is quadratic on dense transpose rows and Julia does not spend core time here.
+@@ -33,6 +36,23 @@ void throw_if_cuda_error(cudaError_t status, const char* context) {
+   throw std::runtime_error(std::string(context) + ": " + cudaGetErrorString(status));
+ }
+ 
++void throw_if_cusparse_error(cusparseStatus_t status, const char* context) {
++  if (status == CUSPARSE_STATUS_SUCCESS) {
++    return;
++  }
++  throw std::runtime_error(std::string(context) + ": cuSPARSE status " +
++                           std::to_string(static_cast<int>(status)));
++}
++
++template <class T>
++cudaError_t doubleton_cuda_malloc(T** ptr, std::size_t bytes) {
++  return cudaMallocAsync(reinterpret_cast<void**>(ptr), bytes, nullptr);
++}
++
++cudaError_t doubleton_cuda_free(void* ptr) {
++  return ptr == nullptr ? cudaSuccess : cudaFreeAsync(ptr, nullptr);
++}
++
+ bool env_enabled(const char* name) {
+   const char* value = std::getenv(name);
+   if (value == nullptr) {
+@@ -95,7 +115,7 @@ void sort_csr_rows_by_col_thrust(DeviceCsrMatrix& matrix, const char* context) {
+     return;
+   }
+   unsigned long long* sort_keys = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&sort_keys, sizeof(unsigned long long) * static_cast<std::size_t>(matrix.nnz)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&sort_keys, sizeof(unsigned long long) * static_cast<std::size_t>(matrix.nnz)),
+                       context);
+   const int blocks_rows = (matrix.rows + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+   _kernel_doubleton_sort_csr_row_keys<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(
+@@ -110,7 +130,7 @@ void sort_csr_rows_by_col_thrust(DeviceCsrMatrix& matrix, const char* context) {
+       matrix.colVal, sort_keys, matrix.nnz);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_doubleton_unpack_csr_row_keys");
+   throw_if_cuda_error(cudaDeviceSynchronize(), context);
+-  cudaFree(sort_keys);
++  doubleton_cuda_free(sort_keys);
+ }
+ 
+ __device__ bool _is_integral_ratio_doubleton_eq(double num, double den, double tol) {
+@@ -496,11 +516,11 @@ void inclusive_scan_i32(std::int32_t* values, std::int32_t n, const char* contex
+   throw_if_cuda_error(cub::DeviceScan::InclusiveSum(
+                           temp_storage, temp_bytes, values, values, n),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&temp_storage, temp_bytes), context);
++  throw_if_cuda_error(doubleton_cuda_malloc(&temp_storage, temp_bytes), context);
+   throw_if_cuda_error(cub::DeviceScan::InclusiveSum(
+                           temp_storage, temp_bytes, values, values, n),
+                       context);
+-  cudaFree(temp_storage);
++  doubleton_cuda_free(temp_storage);
+ }
+ 
+ __global__ void _kernel_fill_i32(std::int32_t* data, std::int32_t value, std::int32_t n) {
+@@ -789,6 +809,60 @@ __global__ void _kernel_select_doubleton_eq_batch_rows(std::uint8_t* selected_ma
+   }
+ }
+ 
++__global__ void _kernel_capture_doubleton_eq_batch_tape_before(
++    std::int32_t* tape_indices,
++    double* tape_vals,
++    const std::int32_t* selected_rows,
++    const std::int32_t* candidate_keep_col,
++    const std::int32_t* candidate_elim_col,
++    const double* candidate_keep_val,
++    const double* candidate_elim_val,
++    const double* old_l,
++    const double* old_u,
++    const double* old_c,
++    const double* old_AU,
++    std::int32_t k) {
++  const std::int32_t t = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (t >= k) {
++    return;
++  }
++  const std::int32_t row = selected_rows[t];
++  const std::int32_t keep = candidate_keep_col[row];
++  const std::int32_t elim = candidate_elim_col[row];
++  std::int32_t* indices = tape_indices + DOUBLETONEQ_TAPE_INDEX_STRIDE * t;
++  double* vals = tape_vals + DOUBLETONEQ_TAPE_VALUE_STRIDE * t;
++  indices[0] = elim;
++  indices[1] = keep;
++  indices[2] = row;
++  vals[0] = candidate_elim_val[row];
++  vals[1] = candidate_keep_val[row];
++  vals[2] = old_AU[row];
++  vals[3] = old_l[elim];
++  vals[4] = old_u[elim];
++  vals[5] = old_l[keep];
++  vals[6] = old_u[keep];
++  vals[9] = old_c[elim];
++  vals[10] = 0.0;
++  vals[11] = 0.0;
++}
++
++__global__ void _kernel_capture_doubleton_eq_batch_tape_after(
++    double* tape_vals,
++    const std::int32_t* tape_indices,
++    const double* new_l,
++    const double* new_u,
++    std::int32_t k) {
++  const std::int32_t t = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (t >= k) {
++    return;
++  }
++  const std::int32_t keep =
++      tape_indices[DOUBLETONEQ_TAPE_INDEX_STRIDE * t + 1];
++  double* vals = tape_vals + DOUBLETONEQ_TAPE_VALUE_STRIDE * t;
++  vals[7] = new_l[keep];
++  vals[8] = new_u[keep];
++}
++
+ __global__ void _kernel_apply_doubleton_eq_batch(std::int32_t* status,
+                                                  double* l,
+                                                  double* u,
+@@ -1163,9 +1237,9 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+   std::int32_t* row_write_ptr = nullptr;
+   std::int32_t* row_counts_new = nullptr;
+ 
+-  throw_if_cuda_error(cudaMalloc(&entry_counts, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&entry_counts, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
+                       "cudaMalloc doubleton batch entry_counts");
+-  throw_if_cuda_error(cudaMalloc(&entry_prefix, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&entry_prefix, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
+                       "cudaMalloc doubleton batch entry_prefix");
+   _kernel_doubleton_eq_batch_entry_counts<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
+       entry_counts, selected_rows, candidate_elim_col, AT_source.rowPtr, AT_source.colVal, AT_source.nzVal,
+@@ -1181,18 +1255,18 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy doubleton batch total_entries");
+   if (total_entries <= 0) {
+-    cudaFree(entry_counts);
+-    cudaFree(entry_prefix);
++    doubleton_cuda_free(entry_counts);
++    doubleton_cuda_free(entry_prefix);
+     return out;
+   }
+ 
+-  throw_if_cuda_error(cudaMalloc(&entry_starts, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&entry_starts, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
+                       "cudaMalloc doubleton batch entry_starts");
+   _kernel_row_ptr_from_prefix<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(entry_starts, entry_prefix, selected_count);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix batch entry starts");
+-  throw_if_cuda_error(cudaMalloc(&delta_keys, sizeof(long long) * static_cast<std::size_t>(total_entries)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_keys, sizeof(long long) * static_cast<std::size_t>(total_entries)),
+                       "cudaMalloc doubleton batch delta_keys");
+-  throw_if_cuda_error(cudaMalloc(&delta_vals, sizeof(double) * static_cast<std::size_t>(total_entries)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_vals, sizeof(double) * static_cast<std::size_t>(total_entries)),
+                       "cudaMalloc doubleton batch delta_vals");
+   _kernel_doubleton_eq_batch_build_delta<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
+       delta_keys, delta_vals, row_shift, entry_starts, selected_rows, candidate_keep_col, candidate_elim_col,
+@@ -1201,7 +1275,7 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_doubleton_eq_batch_build_delta");
+   throw_if_cuda_error(cudaDeviceSynchronize(), "doubleton batch build delta synchronize");
+ 
+-  throw_if_cuda_error(cudaMalloc(&delta_row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
+                       "cudaMalloc doubleton batch delta_row_counts");
+   throw_if_cuda_error(cudaMemset(delta_row_counts, 0, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
+                       "cudaMemset doubleton batch delta_row_counts");
+@@ -1210,19 +1284,19 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+       delta_row_counts, delta_keys, total_entries, source.cols);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_delta_row_counts");
+   inclusive_scan_i32(delta_row_counts, source.rows, "cub inclusive scan doubleton delta rows");
+-  throw_if_cuda_error(cudaMalloc(&delta_row_ptr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_row_ptr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
+                       "cudaMalloc doubleton batch delta_row_ptr");
+   _kernel_row_ptr_from_prefix<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(delta_row_ptr, delta_row_counts, source.rows);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix delta rows");
+-  throw_if_cuda_error(cudaMalloc(&row_write_ptr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&row_write_ptr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
+                       "cudaMalloc doubleton batch row_write_ptr");
+   throw_if_cuda_error(cudaMemcpy(row_write_ptr, delta_row_ptr,
+                                  sizeof(std::int32_t) * static_cast<std::size_t>(source.rows),
+                                  cudaMemcpyDeviceToDevice),
+                       "cudaMemcpy doubleton batch row_write_ptr");
+-  throw_if_cuda_error(cudaMalloc(&delta_keys_by_row, sizeof(long long) * static_cast<std::size_t>(total_entries)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_keys_by_row, sizeof(long long) * static_cast<std::size_t>(total_entries)),
+                       "cudaMalloc doubleton batch delta_keys_by_row");
+-  throw_if_cuda_error(cudaMalloc(&delta_vals_by_row, sizeof(double) * static_cast<std::size_t>(total_entries)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&delta_vals_by_row, sizeof(double) * static_cast<std::size_t>(total_entries)),
+                       "cudaMalloc doubleton batch delta_vals_by_row");
+   _kernel_scatter_delta_by_row<<<blocks_delta, GPU_PRESOLVE_THREADS>>>(
+       delta_keys_by_row, delta_vals_by_row, row_write_ptr, delta_keys, delta_vals, total_entries, source.cols);
+@@ -1231,7 +1305,7 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+       delta_keys_by_row, delta_vals_by_row, delta_row_ptr, source.rows);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_sort_delta_rows_by_col");
+ 
+-  throw_if_cuda_error(cudaMalloc(&row_counts_new, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&row_counts_new, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
+                       "cudaMalloc doubleton batch row_counts_new");
+   _kernel_doubleton_eq_merged_row_counts<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(
+       row_counts_new, source.rowPtr, source.colVal, source.nzVal, delta_row_ptr, delta_keys_by_row, delta_vals_by_row,
+@@ -1246,14 +1320,14 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+   out.rows = source.rows;
+   out.cols = source.cols;
+   out.nnz = nnz_new;
+-  throw_if_cuda_error(cudaMalloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
+                       "cudaMalloc doubleton batch rowPtr_new");
+   _kernel_row_ptr_from_prefix<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(out.rowPtr, row_counts_new, source.rows);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix merged rows");
+   if (nnz_new > 0) {
+-    throw_if_cuda_error(cudaMalloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
++    throw_if_cuda_error(doubleton_cuda_malloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
+                         "cudaMalloc doubleton batch colVal_new");
+-    throw_if_cuda_error(cudaMalloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
++    throw_if_cuda_error(doubleton_cuda_malloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
+                         "cudaMalloc doubleton batch nzVal_new");
+     _kernel_doubleton_eq_copy_merged_rows<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(
+         out.colVal, out.nzVal, out.rowPtr, source.rowPtr, source.colVal, source.nzVal, delta_row_ptr,
+@@ -1263,9 +1337,9 @@ DeviceCsrMatrix build_doubleton_batch_new_A(const DeviceCsrMatrix& source,
+   throw_if_cuda_error(cudaDeviceSynchronize(), "doubleton batch merged A synchronize");
+   *matrix_changed = true;
+ 
+-  cudaFree(entry_counts); cudaFree(entry_prefix); cudaFree(entry_starts); cudaFree(delta_keys); cudaFree(delta_vals);
+-  cudaFree(delta_keys_by_row); cudaFree(delta_vals_by_row); cudaFree(delta_row_counts); cudaFree(delta_row_ptr);
+-  cudaFree(row_write_ptr); cudaFree(row_counts_new);
++  doubleton_cuda_free(entry_counts); doubleton_cuda_free(entry_prefix); doubleton_cuda_free(entry_starts); doubleton_cuda_free(delta_keys); doubleton_cuda_free(delta_vals);
++  doubleton_cuda_free(delta_keys_by_row); doubleton_cuda_free(delta_vals_by_row); doubleton_cuda_free(delta_row_counts); doubleton_cuda_free(delta_row_ptr);
++  doubleton_cuda_free(row_write_ptr); doubleton_cuda_free(row_counts_new);
+   return out;
+ }
+ 
+@@ -1288,54 +1362,69 @@ DeviceCsrMatrix transpose_csr_local(const DeviceCsrMatrix& A) {
+   AT.rows = A.cols;
+   AT.cols = A.rows;
+   AT.nnz = A.nnz;
+-  throw_if_cuda_error(cudaMalloc(&AT.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows + 1)),
+-                      "cudaMalloc doubleton transpose rowPtr");
+-  if (A.nnz == 0) {
+-    throw_if_cuda_error(cudaMemset(AT.rowPtr, 0, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows + 1)),
+-                        "cudaMemset doubleton empty transpose rowPtr");
+-    return AT;
+-  }
+-  std::int32_t* counts = nullptr;
+-  std::int32_t* write_ptr = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&counts, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows)),
+-                      "cudaMalloc doubleton transpose counts");
+-  throw_if_cuda_error(cudaMemset(counts, 0, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows)),
+-                      "cudaMemset doubleton transpose counts");
+-  throw_if_cuda_error(cudaMalloc(&write_ptr, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows)),
+-                      "cudaMalloc doubleton transpose write_ptr");
+-  throw_if_cuda_error(cudaMalloc(&AT.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(A.nnz)),
+-                      "cudaMalloc doubleton transpose colVal");
+-  throw_if_cuda_error(cudaMalloc(&AT.nzVal, sizeof(double) * static_cast<std::size_t>(A.nnz)),
+-                      "cudaMalloc doubleton transpose nzVal");
+-  const int blocks_nnz = (A.nnz + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  _kernel_count_transpose_rows_local<<<blocks_nnz, GPU_PRESOLVE_THREADS>>>(counts, A.colVal, A.nnz);
+-  throw_if_cuda_error(cudaGetLastError(), "_kernel_count_transpose_rows_local");
+-  inclusive_scan_i32(counts, AT.rows, "cub inclusive scan doubleton transpose");
+-  const int blocks_at = (AT.rows + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  _kernel_row_ptr_from_prefix<<<blocks_at, GPU_PRESOLVE_THREADS>>>(AT.rowPtr, counts, AT.rows);
+-  throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix doubleton transpose");
+-  throw_if_cuda_error(cudaMemcpy(write_ptr, AT.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows),
+-                                 cudaMemcpyDeviceToDevice),
+-                      "cudaMemcpy doubleton transpose write_ptr");
+-  const int blocks_rows = (A.rows + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  _kernel_scatter_transpose_atomic_local<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(
+-      AT.colVal, AT.nzVal, write_ptr, A.rowPtr, A.colVal, A.nzVal, A.rows);
+-  throw_if_cuda_error(cudaGetLastError(), "_kernel_scatter_transpose_atomic_local");
+-  if (A.nnz <= CSR_SORT_TRANSPOSE_NNZ_LIMIT) {
+-    _kernel_sort_csr_rows_by_col_local<<<blocks_at, GPU_PRESOLVE_THREADS>>>(AT.colVal, AT.nzVal, AT.rowPtr, AT.rows);
+-    throw_if_cuda_error(cudaGetLastError(), "_kernel_sort_csr_rows_by_col_local");
+-  } else {
+-    sort_csr_rows_by_col_thrust(AT, "doubleton transpose sort CSR rows");
++  cusparseHandle_t handle = nullptr;
++  void* buffer = nullptr;
++  try {
++    throw_if_cuda_error(
++        doubleton_cuda_malloc(&AT.rowPtr,
++                   sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows + 1)),
++        "cudaMalloc doubleton transpose rowPtr");
++    if (A.nnz == 0) {
++      throw_if_cuda_error(
++          cudaMemset(AT.rowPtr, 0,
++                     sizeof(std::int32_t) * static_cast<std::size_t>(AT.rows + 1)),
++          "cudaMemset doubleton empty transpose rowPtr");
++      return AT;
++    }
++    throw_if_cuda_error(
++        doubleton_cuda_malloc(&AT.colVal,
++                   sizeof(std::int32_t) * static_cast<std::size_t>(A.nnz)),
++        "cudaMalloc doubleton transpose colVal");
++    throw_if_cuda_error(
++        doubleton_cuda_malloc(&AT.nzVal, sizeof(double) * static_cast<std::size_t>(A.nnz)),
++        "cudaMalloc doubleton transpose nzVal");
++    throw_if_cusparse_error(cusparseCreate(&handle),
++                            "cusparseCreate doubleton transpose");
++    std::size_t buffer_size = 0;
++    constexpr cusparseCsr2CscAlg_t alg = CUSPARSE_CSR2CSC_ALG1;
++    throw_if_cusparse_error(
++        cusparseCsr2cscEx2_bufferSize(
++            handle, A.rows, A.cols, A.nnz, A.nzVal, A.rowPtr, A.colVal,
++            AT.nzVal, AT.rowPtr, AT.colVal, CUDA_R_64F, CUSPARSE_ACTION_NUMERIC,
++            CUSPARSE_INDEX_BASE_ZERO, alg, &buffer_size),
++        "cusparseCsr2cscEx2_bufferSize doubleton transpose");
++    if (buffer_size > 0) {
++      throw_if_cuda_error(doubleton_cuda_malloc(&buffer, buffer_size),
++                          "cudaMalloc doubleton transpose buffer");
++    }
++    throw_if_cusparse_error(
++        cusparseCsr2cscEx2(
++            handle, A.rows, A.cols, A.nnz, A.nzVal, A.rowPtr, A.colVal,
++            AT.nzVal, AT.rowPtr, AT.colVal, CUDA_R_64F, CUSPARSE_ACTION_NUMERIC,
++            CUSPARSE_INDEX_BASE_ZERO, alg, buffer),
++        "cusparseCsr2cscEx2 doubleton transpose");
++    doubleton_cuda_free(buffer);
++    buffer = nullptr;
++    throw_if_cusparse_error(cusparseDestroy(handle),
++                            "cusparseDestroy doubleton transpose");
++    handle = nullptr;
++  } catch (...) {
++    doubleton_cuda_free(buffer);
++    if (handle != nullptr) {
++      cusparseDestroy(handle);
++    }
++    doubleton_cuda_free(AT.rowPtr);
++    doubleton_cuda_free(AT.colVal);
++    doubleton_cuda_free(AT.nzVal);
++    throw;
+   }
+-  cudaFree(counts);
+-  cudaFree(write_ptr);
+   return AT;
+ }
+ 
+ void free_local_csr(DeviceCsrMatrix& A) {
+-  cudaFree(A.rowPtr);
+-  cudaFree(A.colVal);
+-  cudaFree(A.nzVal);
++  doubleton_cuda_free(A.rowPtr);
++  doubleton_cuda_free(A.colVal);
++  doubleton_cuda_free(A.nzVal);
+   A = DeviceCsrMatrix{};
+ }
+ 
+@@ -1375,32 +1464,32 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+   double* obj_delta_device = nullptr;
+   double* fixed_obj_delta_device = nullptr;
+ 
+-  throw_if_cuda_error(cudaMalloc(&live_col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&live_col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
+                       "cudaMalloc batch live_col_nnz");
+-  throw_if_cuda_error(cudaMalloc(&candidate_mask, static_cast<std::size_t>(m)), "cudaMalloc candidate_mask");
+-  throw_if_cuda_error(cudaMalloc(&acceptable_mask, static_cast<std::size_t>(m)), "cudaMalloc acceptable_mask");
+-  throw_if_cuda_error(cudaMalloc(&active_mask, static_cast<std::size_t>(m)), "cudaMalloc active_mask");
+-  throw_if_cuda_error(cudaMalloc(&selected_mask, static_cast<std::size_t>(m)), "cudaMalloc selected_mask");
+-  throw_if_cuda_error(cudaMalloc(&blocked_col, static_cast<std::size_t>(n)), "cudaMalloc blocked_col");
+-  throw_if_cuda_error(cudaMalloc(&candidate_elim_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&candidate_mask, static_cast<std::size_t>(m)), "cudaMalloc candidate_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&acceptable_mask, static_cast<std::size_t>(m)), "cudaMalloc acceptable_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&active_mask, static_cast<std::size_t>(m)), "cudaMalloc active_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&selected_mask, static_cast<std::size_t>(m)), "cudaMalloc selected_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&blocked_col, static_cast<std::size_t>(n)), "cudaMalloc blocked_col");
++  throw_if_cuda_error(doubleton_cuda_malloc(&candidate_elim_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
+                       "cudaMalloc candidate_elim_col");
+-  throw_if_cuda_error(cudaMalloc(&candidate_keep_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&candidate_keep_col, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
+                       "cudaMalloc candidate_keep_col");
+-  throw_if_cuda_error(cudaMalloc(&candidate_elim_val, sizeof(double) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&candidate_elim_val, sizeof(double) * static_cast<std::size_t>(m)),
+                       "cudaMalloc candidate_elim_val");
+-  throw_if_cuda_error(cudaMalloc(&candidate_keep_val, sizeof(double) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&candidate_keep_val, sizeof(double) * static_cast<std::size_t>(m)),
+                       "cudaMalloc candidate_keep_val");
+-  throw_if_cuda_error(cudaMalloc(&col_owner, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&col_owner, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
+                       "cudaMalloc col_owner");
+-  throw_if_cuda_error(cudaMalloc(&prefix, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&prefix, sizeof(std::int32_t) * static_cast<std::size_t>(m)),
+                       "cudaMalloc batch prefix");
+-  throw_if_cuda_error(cudaMalloc(&status, sizeof(std::int32_t) * 2), "cudaMalloc batch status");
+-  throw_if_cuda_error(cudaMalloc(&subst_pair_mask, static_cast<std::size_t>(m)), "cudaMalloc subst_pair_mask");
+-  throw_if_cuda_error(cudaMalloc(&fixed_pair_mask, static_cast<std::size_t>(m)), "cudaMalloc fixed_pair_mask");
+-  throw_if_cuda_error(cudaMalloc(&row_shift, sizeof(double) * static_cast<std::size_t>(m)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&status, sizeof(std::int32_t) * 2), "cudaMalloc batch status");
++  throw_if_cuda_error(doubleton_cuda_malloc(&subst_pair_mask, static_cast<std::size_t>(m)), "cudaMalloc subst_pair_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&fixed_pair_mask, static_cast<std::size_t>(m)), "cudaMalloc fixed_pair_mask");
++  throw_if_cuda_error(doubleton_cuda_malloc(&row_shift, sizeof(double) * static_cast<std::size_t>(m)),
+                       "cudaMalloc batch row_shift");
+-  throw_if_cuda_error(cudaMalloc(&obj_delta_device, sizeof(double)), "cudaMalloc batch obj_delta");
+-  throw_if_cuda_error(cudaMalloc(&fixed_obj_delta_device, sizeof(double)), "cudaMalloc batch fixed_obj_delta");
++  throw_if_cuda_error(doubleton_cuda_malloc(&obj_delta_device, sizeof(double)), "cudaMalloc batch obj_delta");
++  throw_if_cuda_error(doubleton_cuda_malloc(&fixed_obj_delta_device, sizeof(double)), "cudaMalloc batch fixed_obj_delta");
+   throw_if_cuda_error(cudaMemset(candidate_mask, 0, static_cast<std::size_t>(m)), "cudaMemset candidate_mask");
+   throw_if_cuda_error(cudaMemset(acceptable_mask, 0, static_cast<std::size_t>(m)), "cudaMemset acceptable_mask");
+   throw_if_cuda_error(cudaMemset(selected_mask, 0, static_cast<std::size_t>(m)), "cudaMemset selected_mask");
+@@ -1431,11 +1520,11 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+ 
+   const std::int32_t acceptable_count = count_mask(acceptable_mask, m, prefix);
+   if (acceptable_count == 0) {
+-    cudaFree(live_col_nnz); cudaFree(candidate_mask); cudaFree(acceptable_mask); cudaFree(active_mask);
+-    cudaFree(selected_mask); cudaFree(blocked_col); cudaFree(candidate_elim_col); cudaFree(candidate_keep_col);
+-    cudaFree(candidate_elim_val); cudaFree(candidate_keep_val); cudaFree(col_owner); cudaFree(prefix);
+-    cudaFree(status); cudaFree(subst_pair_mask); cudaFree(fixed_pair_mask);
+-    cudaFree(row_shift); cudaFree(obj_delta_device); cudaFree(fixed_obj_delta_device);
++    doubleton_cuda_free(live_col_nnz); doubleton_cuda_free(candidate_mask); doubleton_cuda_free(acceptable_mask); doubleton_cuda_free(active_mask);
++    doubleton_cuda_free(selected_mask); doubleton_cuda_free(blocked_col); doubleton_cuda_free(candidate_elim_col); doubleton_cuda_free(candidate_keep_col);
++    doubleton_cuda_free(candidate_elim_val); doubleton_cuda_free(candidate_keep_val); doubleton_cuda_free(col_owner); doubleton_cuda_free(prefix);
++    doubleton_cuda_free(status); doubleton_cuda_free(subst_pair_mask); doubleton_cuda_free(fixed_pair_mask);
++    doubleton_cuda_free(row_shift); doubleton_cuda_free(obj_delta_device); doubleton_cuda_free(fixed_obj_delta_device);
+     return false;
+   }
+ 
+@@ -1464,29 +1553,39 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+       (pparams.doubleton_eq_scan &&
+        (selected_count < pparams.doubleton_eq_min_selected_per_batch ||
+         selected_ratio < pparams.doubleton_eq_min_selected_ratio))) {
+-    cudaFree(live_col_nnz); cudaFree(candidate_mask); cudaFree(acceptable_mask); cudaFree(active_mask);
+-    cudaFree(selected_mask); cudaFree(blocked_col); cudaFree(candidate_elim_col); cudaFree(candidate_keep_col);
+-    cudaFree(candidate_elim_val); cudaFree(candidate_keep_val); cudaFree(col_owner); cudaFree(prefix);
+-    cudaFree(status); cudaFree(subst_pair_mask); cudaFree(fixed_pair_mask);
+-    cudaFree(row_shift); cudaFree(obj_delta_device); cudaFree(fixed_obj_delta_device);
++    doubleton_cuda_free(live_col_nnz); doubleton_cuda_free(candidate_mask); doubleton_cuda_free(acceptable_mask); doubleton_cuda_free(active_mask);
++    doubleton_cuda_free(selected_mask); doubleton_cuda_free(blocked_col); doubleton_cuda_free(candidate_elim_col); doubleton_cuda_free(candidate_keep_col);
++    doubleton_cuda_free(candidate_elim_val); doubleton_cuda_free(candidate_keep_val); doubleton_cuda_free(col_owner); doubleton_cuda_free(prefix);
++    doubleton_cuda_free(status); doubleton_cuda_free(subst_pair_mask); doubleton_cuda_free(fixed_pair_mask);
++    doubleton_cuda_free(row_shift); doubleton_cuda_free(obj_delta_device); doubleton_cuda_free(fixed_obj_delta_device);
+     return false;
+   }
+ 
+-  throw_if_cuda_error(cudaMalloc(&selected_rows, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&selected_rows, sizeof(std::int32_t) * static_cast<std::size_t>(selected_count)),
+                       "cudaMalloc selected_rows");
+   _kernel_scatter_mask_indices<<<blocks_rows, GPU_PRESOLVE_THREADS>>>(selected_rows, selected_mask, prefix, m);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_scatter_mask_indices selected");
+ 
+   const int blocks_selected = (selected_count + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  std::vector<double> old_l_host;
+-  std::vector<double> old_u_host;
+-  std::vector<double> old_c_host;
+-  std::vector<double> old_AU_host;
++  std::int32_t* tape_indices_device = nullptr;
++  double* tape_vals_device = nullptr;
+   if (pparams.record_postsolve_tape) {
+-    old_l_host = copy_device_vector(plan.new_l, n, "cudaMemcpy doubleton batch old_l for tape");
+-    old_u_host = copy_device_vector(plan.new_u, n, "cudaMemcpy doubleton batch old_u for tape");
+-    old_c_host = copy_device_vector(plan.new_c, n, "cudaMemcpy doubleton batch old_c for tape");
+-    old_AU_host = copy_device_vector(plan.new_AU, m, "cudaMemcpy doubleton batch old_AU for tape");
++    throw_if_cuda_error(
++        doubleton_cuda_malloc(&tape_indices_device,
++                   sizeof(std::int32_t) * DOUBLETONEQ_TAPE_INDEX_STRIDE *
++                       static_cast<std::size_t>(selected_count)),
++        "cudaMalloc doubleton batch packed tape indices");
++    throw_if_cuda_error(
++        doubleton_cuda_malloc(&tape_vals_device,
++                   sizeof(double) * DOUBLETONEQ_TAPE_VALUE_STRIDE *
++                       static_cast<std::size_t>(selected_count)),
++        "cudaMalloc doubleton batch packed tape values");
++    _kernel_capture_doubleton_eq_batch_tape_before<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
++        tape_indices_device, tape_vals_device, selected_rows, candidate_keep_col,
++        candidate_elim_col, candidate_keep_val, candidate_elim_val, plan.new_l,
++        plan.new_u, plan.new_c, plan.new_AU, selected_count);
++    throw_if_cuda_error(cudaGetLastError(),
++                        "_kernel_capture_doubleton_eq_batch_tape_before");
+   }
+   _kernel_apply_doubleton_eq_batch<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
+       status, plan.new_l, plan.new_u, plan.new_c, plan.new_AL, plan.new_AU, plan.keep_row_mask,
+@@ -1506,47 +1605,71 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+   } else if (status_host[1] != 0) {
+     const std::int32_t subst_count = count_mask(subst_pair_mask, selected_count, prefix);
+     if (subst_count > 0) {
+-      throw_if_cuda_error(cudaMalloc(&subst_rows, sizeof(std::int32_t) * static_cast<std::size_t>(subst_count)),
++      throw_if_cuda_error(doubleton_cuda_malloc(&subst_rows, sizeof(std::int32_t) * static_cast<std::size_t>(subst_count)),
+                           "cudaMalloc subst_rows");
+       _kernel_scatter_selected_rows_by_pair_mask<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
+           subst_rows, selected_rows, subst_pair_mask, prefix, selected_count);
+       throw_if_cuda_error(cudaGetLastError(), "_kernel_scatter_selected_rows_by_pair_mask");
+       if (pparams.record_postsolve_tape) {
+-        const std::vector<std::int32_t> subst_rows_host =
+-            copy_device_vector(subst_rows, subst_count, "cudaMemcpy doubleton batch subst_rows for tape");
+-        const std::vector<std::int32_t> candidate_keep_host =
+-            copy_device_vector(candidate_keep_col, m, "cudaMemcpy doubleton batch keep cols for tape");
+-        const std::vector<std::int32_t> candidate_elim_host =
+-            copy_device_vector(candidate_elim_col, m, "cudaMemcpy doubleton batch elim cols for tape");
+-        const std::vector<double> candidate_keep_val_host =
+-            copy_device_vector(candidate_keep_val, m, "cudaMemcpy doubleton batch keep vals for tape");
+-        const std::vector<double> candidate_elim_val_host =
+-            copy_device_vector(candidate_elim_val, m, "cudaMemcpy doubleton batch elim vals for tape");
+-        const std::vector<double> new_l_host =
+-            copy_device_vector(plan.new_l, n, "cudaMemcpy doubleton batch new_l for tape");
+-        const std::vector<double> new_u_host =
+-            copy_device_vector(plan.new_u, n, "cudaMemcpy doubleton batch new_u for tape");
+-        for (std::int32_t t = 0; t < subst_count; ++t) {
+-          const std::int32_t row = subst_rows_host[static_cast<std::size_t>(t)];
+-          const std::int32_t keep_col = candidate_keep_host[static_cast<std::size_t>(row)];
+-          const std::int32_t elim_col = candidate_elim_host[static_cast<std::size_t>(row)];
+-          append_postsolve_record(
+-              plan.tape,
+-              PostsolveReductionType::DoubletonEq,
+-              std::vector<std::int32_t>{elim_col, keep_col, row, 0},
+-              std::vector<double>{candidate_elim_val_host[static_cast<std::size_t>(row)],
+-                                  candidate_keep_val_host[static_cast<std::size_t>(row)],
+-                                  old_AU_host[static_cast<std::size_t>(row)],
+-                                  old_l_host[static_cast<std::size_t>(elim_col)],
+-                                  old_u_host[static_cast<std::size_t>(elim_col)],
+-                                  old_l_host[static_cast<std::size_t>(keep_col)],
+-                                  old_u_host[static_cast<std::size_t>(keep_col)],
+-                                  new_l_host[static_cast<std::size_t>(keep_col)],
+-                                  new_u_host[static_cast<std::size_t>(keep_col)],
+-                                  old_c_host[static_cast<std::size_t>(elim_col)],
+-                                  0.0,
+-                                  0.0},
+-              PostsolveDualMode::Minimal);
++        _kernel_capture_doubleton_eq_batch_tape_after<<<blocks_selected, GPU_PRESOLVE_THREADS>>>(
++            tape_vals_device, tape_indices_device, plan.new_l, plan.new_u,
++            selected_count);
++        throw_if_cuda_error(cudaGetLastError(),
++                            "_kernel_capture_doubleton_eq_batch_tape_after");
++        const std::vector<std::int32_t> tape_indices_host = copy_device_vector(
++            tape_indices_device,
++            DOUBLETONEQ_TAPE_INDEX_STRIDE * selected_count,
++            "cudaMemcpy doubleton batch packed tape indices");
++        const std::vector<double> tape_vals_host = copy_device_vector(
++            tape_vals_device,
++            DOUBLETONEQ_TAPE_VALUE_STRIDE * selected_count,
++            "cudaMemcpy doubleton batch packed tape values");
++        const std::vector<std::uint8_t> subst_pair_mask_host = copy_device_vector(
++            subst_pair_mask, selected_count,
++            "cudaMemcpy doubleton batch substitution mask for tape");
++        const std::size_t old_records = plan.tape.types.size();
++        const std::size_t old_indices = plan.tape.indices.size();
++        const std::size_t old_values = plan.tape.vals.size();
++        plan.tape.types.resize(old_records + static_cast<std::size_t>(subst_count));
++        plan.tape.dual_modes.resize(old_records + static_cast<std::size_t>(subst_count));
++        plan.tape.indices.resize(old_indices + 4 * static_cast<std::size_t>(subst_count));
++        plan.tape.vals.resize(old_values + DOUBLETONEQ_TAPE_VALUE_STRIDE *
++                                              static_cast<std::size_t>(subst_count));
++        plan.tape.index_starts.resize(old_records + static_cast<std::size_t>(subst_count) + 1);
++        plan.tape.value_starts.resize(old_records + static_cast<std::size_t>(subst_count) + 1);
++        std::size_t out_record = 0;
++        for (std::int32_t t = 0; t < selected_count; ++t) {
++          if (subst_pair_mask_host[static_cast<std::size_t>(t)] ==
++              std::uint8_t{0}) {
++            continue;
++          }
++          const std::size_t index_base =
++              static_cast<std::size_t>(DOUBLETONEQ_TAPE_INDEX_STRIDE * t);
++          const std::size_t value_base =
++              static_cast<std::size_t>(DOUBLETONEQ_TAPE_VALUE_STRIDE * t);
++          const std::size_t record = old_records + out_record;
++          const std::size_t index_out = old_indices + 4 * out_record;
++          const std::size_t value_out =
++              old_values + DOUBLETONEQ_TAPE_VALUE_STRIDE * out_record;
++          plan.tape.types[record] =
++              static_cast<std::int32_t>(PostsolveReductionType::DoubletonEq);
++          plan.tape.dual_modes[record] =
++              static_cast<std::uint8_t>(PostsolveDualMode::Minimal);
++          plan.tape.indices[index_out] = tape_indices_host[index_base];
++          plan.tape.indices[index_out + 1] = tape_indices_host[index_base + 1];
++          plan.tape.indices[index_out + 2] = tape_indices_host[index_base + 2];
++          plan.tape.indices[index_out + 3] = 0;
++          for (std::size_t j = 0; j < DOUBLETONEQ_TAPE_VALUE_STRIDE; ++j) {
++            plan.tape.vals[value_out + j] = tape_vals_host[value_base + j];
++          }
++          plan.tape.index_starts[record + 1] =
++              static_cast<std::int32_t>(index_out + 4);
++          plan.tape.value_starts[record + 1] =
++              static_cast<std::int32_t>(value_out + DOUBLETONEQ_TAPE_VALUE_STRIDE);
++          ++out_record;
++        }
++        if (out_record != static_cast<std::size_t>(subst_count)) {
++          throw std::runtime_error("doubleton batch substitution tape count mismatch");
+         }
+       }
+     }
+@@ -1579,9 +1702,9 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+           &matrix_changed);
+       if (matrix_changed) {
+         if (plan.has_new_A) {
+-          cudaFree(plan.new_A.rowPtr);
+-          cudaFree(plan.new_A.colVal);
+-          cudaFree(plan.new_A.nzVal);
++          doubleton_cuda_free(plan.new_A.rowPtr);
++          doubleton_cuda_free(plan.new_A.colVal);
++          doubleton_cuda_free(plan.new_A.nzVal);
+         }
+         plan.new_A = rewritten_A;
+         plan.has_new_A = true;
+@@ -1604,11 +1727,12 @@ bool apply_rule_doubleton_eq_batch_once(PresolvePlanGpu& plan,
+     changed = true;
+   }
+ 
+-  cudaFree(live_col_nnz); cudaFree(candidate_mask); cudaFree(acceptable_mask); cudaFree(active_mask);
+-  cudaFree(selected_mask); cudaFree(blocked_col); cudaFree(candidate_elim_col); cudaFree(candidate_keep_col);
+-  cudaFree(candidate_elim_val); cudaFree(candidate_keep_val); cudaFree(col_owner); cudaFree(prefix);
+-  cudaFree(selected_rows); cudaFree(subst_rows); cudaFree(status); cudaFree(subst_pair_mask); cudaFree(fixed_pair_mask);
+-  cudaFree(row_shift); cudaFree(obj_delta_device); cudaFree(fixed_obj_delta_device);
++  doubleton_cuda_free(live_col_nnz); doubleton_cuda_free(candidate_mask); doubleton_cuda_free(acceptable_mask); doubleton_cuda_free(active_mask);
++  doubleton_cuda_free(selected_mask); doubleton_cuda_free(blocked_col); doubleton_cuda_free(candidate_elim_col); doubleton_cuda_free(candidate_keep_col);
++  doubleton_cuda_free(candidate_elim_val); doubleton_cuda_free(candidate_keep_val); doubleton_cuda_free(col_owner); doubleton_cuda_free(prefix);
++  doubleton_cuda_free(selected_rows); doubleton_cuda_free(subst_rows); doubleton_cuda_free(status); doubleton_cuda_free(subst_pair_mask); doubleton_cuda_free(fixed_pair_mask);
++  doubleton_cuda_free(tape_indices_device); doubleton_cuda_free(tape_vals_device);
++  doubleton_cuda_free(row_shift); doubleton_cuda_free(obj_delta_device); doubleton_cuda_free(fixed_obj_delta_device);
+   return changed;
+ }
+ 
+@@ -1617,7 +1741,6 @@ bool apply_rule_doubleton_eq_batch(PresolvePlanGpu& plan,
+                                    const PresolveParams& pparams) {
+   bool changed_any = false;
+   DeviceCsrMatrix AT_source = lp.AT;
+-  sort_csr_rows_by_col_thrust(AT_source, "doubleton sort input AT rows");
+   bool owns_at_source = false;
+   const bool scan_enabled = pparams.doubleton_eq_scan;
+   const int batch_round_limit =
+@@ -1755,7 +1878,7 @@ DeviceCsrMatrix build_doubleton_scalar_new_A(const DeviceCsrMatrix& source,
+   }
+ 
+   std::int32_t* row_counts = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&row_counts, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows)),
+                       "cudaMalloc doubleton row_counts");
+   const int blocks = (source.rows + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+   _kernel_doubleton_eq_row_counts<<<blocks, GPU_PRESOLVE_THREADS>>>(
+@@ -1769,14 +1892,14 @@ DeviceCsrMatrix build_doubleton_scalar_new_A(const DeviceCsrMatrix& source,
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy doubleton nnz_new");
+   out.nnz = nnz_new;
+-  throw_if_cuda_error(cudaMalloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&out.rowPtr, sizeof(std::int32_t) * static_cast<std::size_t>(source.rows + 1)),
+                       "cudaMalloc doubleton rowPtr_new");
+   _kernel_row_ptr_from_prefix<<<blocks, GPU_PRESOLVE_THREADS>>>(out.rowPtr, row_counts, source.rows);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_row_ptr_from_prefix doubleton");
+   if (nnz_new > 0) {
+-    throw_if_cuda_error(cudaMalloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
++    throw_if_cuda_error(doubleton_cuda_malloc(&out.colVal, sizeof(std::int32_t) * static_cast<std::size_t>(nnz_new)),
+                         "cudaMalloc doubleton colVal_new");
+-    throw_if_cuda_error(cudaMalloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
++    throw_if_cuda_error(doubleton_cuda_malloc(&out.nzVal, sizeof(double) * static_cast<std::size_t>(nnz_new)),
+                         "cudaMalloc doubleton nzVal_new");
+     _kernel_copy_doubleton_eq_rows<<<blocks, GPU_PRESOLVE_THREADS>>>(
+         out.colVal,
+@@ -1791,7 +1914,7 @@ DeviceCsrMatrix build_doubleton_scalar_new_A(const DeviceCsrMatrix& source,
+         source.rows);
+     throw_if_cuda_error(cudaGetLastError(), "_kernel_copy_doubleton_eq_rows");
+   }
+-  cudaFree(row_counts);
++  doubleton_cuda_free(row_counts);
+   return out;
+ }
+ 
+@@ -1820,13 +1943,13 @@ void apply_rule_doubleton_eq(PresolvePlanGpu& plan,
+   double* meta_f64 = nullptr;
+   std::int32_t* status = nullptr;
+   double* obj_delta_device = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&live_col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++  throw_if_cuda_error(doubleton_cuda_malloc(&live_col_nnz, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
+                       "cudaMalloc doubleton live_col_nnz");
+-  throw_if_cuda_error(cudaMalloc(&target_row_ref, sizeof(std::int32_t)), "cudaMalloc doubleton target_row_ref");
+-  throw_if_cuda_error(cudaMalloc(&meta_i32, sizeof(std::int32_t) * 3), "cudaMalloc doubleton meta_i32");
+-  throw_if_cuda_error(cudaMalloc(&meta_f64, sizeof(double) * 8), "cudaMalloc doubleton meta_f64");
+-  throw_if_cuda_error(cudaMalloc(&status, sizeof(std::int32_t) * 2), "cudaMalloc doubleton status");
+-  throw_if_cuda_error(cudaMalloc(&obj_delta_device, sizeof(double)), "cudaMalloc doubleton obj_delta");
++  throw_if_cuda_error(doubleton_cuda_malloc(&target_row_ref, sizeof(std::int32_t)), "cudaMalloc doubleton target_row_ref");
++  throw_if_cuda_error(doubleton_cuda_malloc(&meta_i32, sizeof(std::int32_t) * 3), "cudaMalloc doubleton meta_i32");
++  throw_if_cuda_error(doubleton_cuda_malloc(&meta_f64, sizeof(double) * 8), "cudaMalloc doubleton meta_f64");
++  throw_if_cuda_error(doubleton_cuda_malloc(&status, sizeof(std::int32_t) * 2), "cudaMalloc doubleton status");
++  throw_if_cuda_error(doubleton_cuda_malloc(&obj_delta_device, sizeof(double)), "cudaMalloc doubleton obj_delta");
+   throw_if_cuda_error(cudaMemset(status, 0, sizeof(std::int32_t) * 2), "cudaMemset doubleton status");
+   throw_if_cuda_error(cudaMemset(obj_delta_device, 0, sizeof(double)), "cudaMemset doubleton obj_delta");
+ 
+@@ -1875,12 +1998,12 @@ void apply_rule_doubleton_eq(PresolvePlanGpu& plan,
+   throw_if_cuda_error(cudaMemcpy(&target_row, target_row_ref, sizeof(std::int32_t), cudaMemcpyDeviceToHost),
+                       "cudaMemcpy doubleton target");
+   if (target_row >= m) {
+-    cudaFree(live_col_nnz);
+-    cudaFree(target_row_ref);
+-    cudaFree(meta_i32);
+-    cudaFree(meta_f64);
+-    cudaFree(status);
+-    cudaFree(obj_delta_device);
++    doubleton_cuda_free(live_col_nnz);
++    doubleton_cuda_free(target_row_ref);
++    doubleton_cuda_free(meta_i32);
++    doubleton_cuda_free(meta_f64);
++    doubleton_cuda_free(status);
++    doubleton_cuda_free(obj_delta_device);
+     return;
+   }
+ 
+@@ -1947,9 +2070,9 @@ void apply_rule_doubleton_eq(PresolvePlanGpu& plan,
+     const bool free_old_new_A = plan.has_new_A;
+     DeviceCsrMatrix rewritten_A = build_doubleton_scalar_new_A(source_A, meta_i32, meta_f64, pparams.zero_tol);
+     if (plan.has_new_A) {
+-      cudaFree(plan.new_A.rowPtr);
+-      cudaFree(plan.new_A.colVal);
+-      cudaFree(plan.new_A.nzVal);
++      doubleton_cuda_free(plan.new_A.rowPtr);
++      doubleton_cuda_free(plan.new_A.colVal);
++      doubleton_cuda_free(plan.new_A.nzVal);
+     }
+     (void)free_old_new_A;
+     plan.new_A = rewritten_A;
+@@ -1963,12 +2086,12 @@ void apply_rule_doubleton_eq(PresolvePlanGpu& plan,
+     plan.has_change = true;
+   }
+ 
+-  cudaFree(live_col_nnz);
+-  cudaFree(target_row_ref);
+-  cudaFree(meta_i32);
+-  cudaFree(meta_f64);
+-  cudaFree(status);
+-  cudaFree(obj_delta_device);
++  doubleton_cuda_free(live_col_nnz);
++  doubleton_cuda_free(target_row_ref);
++  doubleton_cuda_free(meta_i32);
++  doubleton_cuda_free(meta_f64);
++  doubleton_cuda_free(status);
++  doubleton_cuda_free(obj_delta_device);
+ }
+ 
+ }  // namespace gpu_presolver::presolve
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_parallel_rows.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_parallel_rows.cu
+index 3bd21c5..b9bccb5 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_parallel_rows.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_parallel_rows.cu
+@@ -119,6 +119,67 @@ __global__ void _kernel_parallel_row_hashes(unsigned long long* row_hash,
+   }
+ }
+ 
++__global__ void _kernel_parallel_row_hashes_warp(unsigned long long* row_hash,
++                                                 const std::uint8_t* keep_row,
++                                                 const std::int32_t* row_ptr,
++                                                 const std::int32_t* col_val,
++                                                 const double* nz_val,
++                                                 double coeff_tol,
++                                                 std::int32_t m) {
++  constexpr std::int32_t warp_size = 32;
++  const std::int32_t lane = static_cast<std::int32_t>(threadIdx.x) & (warp_size - 1);
++  const std::int32_t warps_per_block = static_cast<std::int32_t>(blockDim.x) / warp_size;
++  const std::int32_t warp = static_cast<std::int32_t>(threadIdx.x) / warp_size;
++  const std::int32_t i = static_cast<std::int32_t>(blockIdx.x) * warps_per_block + warp;
++  if (i >= m) {
++    return;
++  }
++
++  if (keep_row[i] == std::uint8_t{0}) {
++    if (lane == 0) {
++      row_hash[i] = static_cast<unsigned long long>(i);
++    }
++    return;
++  }
++
++  const std::int32_t start_i = row_ptr[i];
++  const std::int32_t stop_i = row_ptr[i + 1];
++  const std::int32_t len_i = stop_i - start_i;
++  if (len_i <= 0) {
++    if (lane == 0) {
++      row_hash[i] = _parallel_row_hash_mix(FNV_OFFSET,
++                                           static_cast<unsigned long long>(i));
++    }
++    return;
++  }
++
++  const double pivot = nz_val[start_i];
++  if (fabs(pivot) <= coeff_tol) {
++    if (lane == 0) {
++      row_hash[i] = _parallel_row_hash_mix(FNV_OFFSET,
++                                           static_cast<unsigned long long>(i));
++    }
++    return;
++  }
++
++  unsigned long long aggregate = 0ULL;
++  for (std::int32_t p = start_i + lane; p < stop_i; p += warp_size) {
++    unsigned long long entry = _parallel_row_hash_mix(
++        FNV_OFFSET, static_cast<unsigned long long>(col_val[p]));
++    const double norm = nz_val[p] / pivot;
++    entry = _parallel_row_hash_mix(entry, _double_bits(norm));
++    aggregate ^= entry;
++  }
++  for (std::int32_t offset = warp_size / 2; offset > 0; offset /= 2) {
++    aggregate ^= __shfl_down_sync(0xffffffffU, aggregate, offset);
++  }
++  if (lane == 0) {
++    const unsigned long long seed = _parallel_row_hash_mix(
++        FNV_OFFSET, static_cast<unsigned long long>(len_i));
++    row_hash[i] = _parallel_row_hash_mix(seed, aggregate);
++  }
++}
++
+ __device__ bool _parallel_row_ratio(std::int32_t i,
+                                     std::int32_t k,
+                                     const std::int32_t* row_ptr,
+@@ -389,15 +450,21 @@ void apply_rule_parallel_rows(PresolvePlanGpu& plan,
+   throw_if_cuda_error(cudaMemset(changed, 0, sizeof(std::int32_t)), "cudaMemset parallel_rows changed");
+ 
+   const int blocks = (m + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  _kernel_parallel_row_hashes<<<blocks, GPU_PRESOLVE_THREADS>>>(
+-      row_hash,
+-      plan.keep_row_mask,
+-      lp.A.rowPtr,
+-      lp.A.colVal,
+-      lp.A.nzVal,
+-      pparams.zero_tol,
+-      m);
+-  throw_if_cuda_error(cudaGetLastError(), "_kernel_parallel_row_hashes");
++  const bool use_warp_hash =
++      static_cast<std::int64_t>(lp.A.nnz) > 32LL * static_cast<std::int64_t>(m);
++  if (use_warp_hash) {
++    constexpr int warps_per_block = GPU_PRESOLVE_THREADS / 32;
++    const int warp_blocks = (m + warps_per_block - 1) / warps_per_block;
++    _kernel_parallel_row_hashes_warp<<<warp_blocks, GPU_PRESOLVE_THREADS>>>(
++        row_hash, plan.keep_row_mask, lp.A.rowPtr, lp.A.colVal, lp.A.nzVal,
++        pparams.zero_tol, m);
++    throw_if_cuda_error(cudaGetLastError(), "_kernel_parallel_row_hashes_warp");
++  } else {
++    _kernel_parallel_row_hashes<<<blocks, GPU_PRESOLVE_THREADS>>>(
++        row_hash, plan.keep_row_mask, lp.A.rowPtr, lp.A.colVal, lp.A.nzVal,
++        pparams.zero_tol, m);
++    throw_if_cuda_error(cudaGetLastError(), "_kernel_parallel_row_hashes");
++  }
+   throw_if_cuda_error(cudaDeviceSynchronize(), "parallel_rows hash synchronize");
+   profile_stage("hash", rule_start);
+ 
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_primal_propagation.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_primal_propagation.cu
+index c2d5155..e3947a6 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_primal_propagation.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_primal_propagation.cu
+@@ -72,71 +72,220 @@ void append_postsolve_record(PostsolveTape& tape,
+   tape.dual_modes.push_back(static_cast<std::uint8_t>(dual_mode));
+ }
+ 
+-void append_fixed_col_tape_from_device(PostsolveTape& tape,
+-                                       const std::uint8_t* fixed_mask,
+-                                       const double* fixed_val,
+-                                       const std::uint8_t* keep_row,
+-                                       const double* c,
+-                                       const DeviceCsrMatrix& AT,
+-                                       std::int32_t m,
+-                                       std::int32_t n,
+-                                       const char* context) {
+-  std::vector<std::uint8_t> host_fixed_mask(static_cast<std::size_t>(n));
+-  std::vector<std::uint8_t> host_keep_row(static_cast<std::size_t>(m));
+-  std::vector<double> host_fixed_val(static_cast<std::size_t>(n));
+-  std::vector<double> host_c(static_cast<std::size_t>(n));
+-  std::vector<std::int32_t> host_at_row_ptr(static_cast<std::size_t>(n + 1));
+-  std::vector<std::int32_t> host_at_col_val(static_cast<std::size_t>(AT.nnz));
+-  std::vector<double> host_at_nz_val(static_cast<std::size_t>(AT.nnz));
+-
+-  throw_if_cuda_error(cudaMemcpy(host_fixed_mask.data(), fixed_mask, static_cast<std::size_t>(n),
+-                                 cudaMemcpyDeviceToHost),
++__global__ void _kernel_primal_fixed_tape_counts(
++    std::int32_t* selected_scan,
++    std::int32_t* active_nnz_scan,
++    const std::uint8_t* fixed_mask,
++    const std::uint8_t* keep_row,
++    const std::int32_t* at_row_ptr,
++    const std::int32_t* at_col_val,
++    std::int32_t n) {
++  const std::int32_t col = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (col >= n) {
++    return;
++  }
++  const bool selected = fixed_mask[col] != std::uint8_t{0};
++  selected_scan[col] = selected ? 1 : 0;
++  std::int32_t active_nnz = 0;
++  if (selected) {
++    for (std::int32_t p = at_row_ptr[col]; p < at_row_ptr[col + 1]; ++p) {
++      active_nnz += keep_row[at_col_val[p]] != std::uint8_t{0} ? 1 : 0;
++    }
++  }
++  active_nnz_scan[col] = active_nnz;
++}
++
++__global__ void _kernel_primal_pack_fixed_tape(
++    std::int32_t* packed_cols,
++    double* packed_fixed_vals,
++    double* packed_c,
++    std::int32_t* packed_nnz_starts,
++    std::int32_t* packed_rows,
++    double* packed_coeffs,
++    const std::int32_t* selected_scan,
++    const std::int32_t* active_nnz_scan,
++    const std::uint8_t* fixed_mask,
++    const double* fixed_val,
++    const std::uint8_t* keep_row,
++    const double* c,
++    const std::int32_t* at_row_ptr,
++    const std::int32_t* at_col_val,
++    const double* at_nz_val,
++    std::int32_t n) {
++  const std::int32_t col = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (col >= n || fixed_mask[col] == std::uint8_t{0}) {
++    return;
++  }
++  const std::int32_t prev_selected = col == 0 ? 0 : selected_scan[col - 1];
++  const std::int32_t record = selected_scan[col] - 1;
++  if (selected_scan[col] == prev_selected || record < 0) {
++    return;
++  }
++  const std::int32_t nnz_start = col == 0 ? 0 : active_nnz_scan[col - 1];
++  const std::int32_t nnz_stop = active_nnz_scan[col];
++  packed_cols[record] = col;
++  packed_fixed_vals[record] = fixed_val[col];
++  packed_c[record] = c[col];
++  packed_nnz_starts[record + 1] = nnz_stop;
++  std::int32_t out = nnz_start;
++  for (std::int32_t p = at_row_ptr[col]; p < at_row_ptr[col + 1]; ++p) {
++    const std::int32_t row = at_col_val[p];
++    if (keep_row[row] == std::uint8_t{0}) {
++      continue;
++    }
++    packed_rows[out] = row;
++    packed_coeffs[out] = at_nz_val[p];
++    ++out;
++  }
++}
++
++double append_primal_fixed_col_tape_compacted_from_device(
++    PostsolveTape* tape,
++    const std::uint8_t* fixed_mask,
++    const double* fixed_val,
++    const std::uint8_t* keep_row,
++    const double* c,
++    const DeviceCsrMatrix& AT,
++    std::int32_t n,
++    const char* context) {
++  if (n <= 0) {
++    return 0.0;
++  }
++  std::int32_t* selected_scan = nullptr;
++  std::int32_t* active_nnz_scan = nullptr;
++  throw_if_cuda_error(cudaMalloc(&selected_scan,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(n)),
+                       context);
+-  if (m > 0) {
+-    throw_if_cuda_error(cudaMemcpy(host_keep_row.data(), keep_row, static_cast<std::size_t>(m),
+-                                   cudaMemcpyDeviceToHost),
++  throw_if_cuda_error(cudaMalloc(&active_nnz_scan,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++                      context);
++  const int blocks_n = (n + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
++  _kernel_primal_fixed_tape_counts<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
++      selected_scan, active_nnz_scan, fixed_mask, keep_row, AT.rowPtr, AT.colVal, n);
++  throw_if_cuda_error(cudaGetLastError(), "_kernel_primal_fixed_tape_counts");
++  inclusive_scan_i32(selected_scan, n, context);
++  inclusive_scan_i32(active_nnz_scan, n, context);
++  std::int32_t counts[2] = {0, 0};
++  throw_if_cuda_error(cudaMemcpy(&counts[0], selected_scan + n - 1,
++                                 sizeof(std::int32_t), cudaMemcpyDeviceToHost),
++                      context);
++  throw_if_cuda_error(cudaMemcpy(&counts[1], active_nnz_scan + n - 1,
++                                 sizeof(std::int32_t), cudaMemcpyDeviceToHost),
++                      context);
++  const std::int32_t fixed_count = counts[0];
++  const std::int32_t active_nnz = counts[1];
++  if (fixed_count <= 0) {
++    cudaFree(selected_scan);
++    cudaFree(active_nnz_scan);
++    return 0.0;
++  }
++
++  std::int32_t* packed_cols = nullptr;
++  double* packed_fixed_vals = nullptr;
++  double* packed_c = nullptr;
++  std::int32_t* packed_nnz_starts = nullptr;
++  std::int32_t* packed_rows = nullptr;
++  double* packed_coeffs = nullptr;
++  throw_if_cuda_error(cudaMalloc(&packed_cols,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(fixed_count)),
++                      context);
++  throw_if_cuda_error(cudaMalloc(&packed_fixed_vals,
++                                 sizeof(double) * static_cast<std::size_t>(fixed_count)),
++                      context);
++  throw_if_cuda_error(cudaMalloc(&packed_c,
++                                 sizeof(double) * static_cast<std::size_t>(fixed_count)),
++                      context);
++  throw_if_cuda_error(cudaMalloc(&packed_nnz_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(fixed_count + 1)),
++                      context);
++  throw_if_cuda_error(cudaMemset(packed_nnz_starts, 0, sizeof(std::int32_t)), context);
++  if (active_nnz > 0) {
++    throw_if_cuda_error(cudaMalloc(&packed_rows,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(active_nnz)),
++                        context);
++    throw_if_cuda_error(cudaMalloc(&packed_coeffs,
++                                   sizeof(double) * static_cast<std::size_t>(active_nnz)),
+                         context);
+   }
+-  throw_if_cuda_error(cudaMemcpy(host_fixed_val.data(), fixed_val,
+-                                 sizeof(double) * static_cast<std::size_t>(n),
++  _kernel_primal_pack_fixed_tape<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
++      packed_cols, packed_fixed_vals, packed_c, packed_nnz_starts, packed_rows,
++      packed_coeffs, selected_scan, active_nnz_scan, fixed_mask, fixed_val,
++      keep_row, c, AT.rowPtr, AT.colVal, AT.nzVal, n);
++  throw_if_cuda_error(cudaGetLastError(), "_kernel_primal_pack_fixed_tape");
++
++  std::vector<std::int32_t> host_cols(static_cast<std::size_t>(fixed_count));
++  std::vector<double> host_fixed_vals(static_cast<std::size_t>(fixed_count));
++  std::vector<double> host_c(static_cast<std::size_t>(fixed_count));
++  std::vector<std::int32_t> host_nnz_starts(
++      tape == nullptr ? 0 : static_cast<std::size_t>(fixed_count + 1));
++  std::vector<std::int32_t> host_rows(
++      tape == nullptr ? 0 : static_cast<std::size_t>(active_nnz));
++  std::vector<double> host_coeffs(
++      tape == nullptr ? 0 : static_cast<std::size_t>(active_nnz));
++  throw_if_cuda_error(cudaMemcpy(host_cols.data(), packed_cols,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(fixed_count),
+                                  cudaMemcpyDeviceToHost),
+                       context);
+-  throw_if_cuda_error(cudaMemcpy(host_c.data(), c, sizeof(double) * static_cast<std::size_t>(n),
++  throw_if_cuda_error(cudaMemcpy(host_fixed_vals.data(), packed_fixed_vals,
++                                 sizeof(double) * static_cast<std::size_t>(fixed_count),
+                                  cudaMemcpyDeviceToHost),
+                       context);
+-  throw_if_cuda_error(cudaMemcpy(host_at_row_ptr.data(), AT.rowPtr,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(n + 1),
++  throw_if_cuda_error(cudaMemcpy(host_c.data(), packed_c,
++                                 sizeof(double) * static_cast<std::size_t>(fixed_count),
+                                  cudaMemcpyDeviceToHost),
+                       context);
+-  if (AT.nnz > 0) {
+-    throw_if_cuda_error(cudaMemcpy(host_at_col_val.data(), AT.colVal,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(AT.nnz),
+-                                   cudaMemcpyDeviceToHost),
+-                        context);
+-    throw_if_cuda_error(cudaMemcpy(host_at_nz_val.data(), AT.nzVal,
+-                                   sizeof(double) * static_cast<std::size_t>(AT.nnz),
++  if (tape != nullptr) {
++    throw_if_cuda_error(cudaMemcpy(host_nnz_starts.data(), packed_nnz_starts,
++                                   sizeof(std::int32_t) * static_cast<std::size_t>(fixed_count + 1),
+                                    cudaMemcpyDeviceToHost),
+                         context);
++    if (active_nnz > 0) {
++      throw_if_cuda_error(cudaMemcpy(host_rows.data(), packed_rows,
++                                     sizeof(std::int32_t) * static_cast<std::size_t>(active_nnz),
++                                     cudaMemcpyDeviceToHost),
++                          context);
++      throw_if_cuda_error(cudaMemcpy(host_coeffs.data(), packed_coeffs,
++                                     sizeof(double) * static_cast<std::size_t>(active_nnz),
++                                     cudaMemcpyDeviceToHost),
++                          context);
++    }
+   }
+ 
+-  for (std::int32_t col = 0; col < n; ++col) {
+-    const auto col_idx = static_cast<std::size_t>(col);
+-    if (host_fixed_mask[col_idx] == std::uint8_t{0}) {
++  long double objective_delta = 0.0L;
++  for (std::int32_t rec = 0; rec < fixed_count; ++rec) {
++    objective_delta +=
++        static_cast<long double>(host_c[static_cast<std::size_t>(rec)]) *
++        static_cast<long double>(host_fixed_vals[static_cast<std::size_t>(rec)]);
++    if (tape == nullptr) {
+       continue;
+     }
+-    std::vector<std::int32_t> indices{col};
+-    std::vector<double> vals{host_fixed_val[col_idx], host_c[col_idx]};
+-    for (std::int32_t p = host_at_row_ptr[col_idx]; p < host_at_row_ptr[col_idx + 1]; ++p) {
+-      const std::int32_t row = host_at_col_val[static_cast<std::size_t>(p)];
+-      if (host_keep_row[static_cast<std::size_t>(row)] == std::uint8_t{0}) {
+-        continue;
+-      }
+-      indices.push_back(row);
+-      vals.push_back(host_at_nz_val[static_cast<std::size_t>(p)]);
++    const std::int32_t start = host_nnz_starts[static_cast<std::size_t>(rec)];
++    const std::int32_t stop = host_nnz_starts[static_cast<std::size_t>(rec + 1)];
++    std::vector<std::int32_t> indices;
++    std::vector<double> vals;
++    indices.reserve(static_cast<std::size_t>(1 + stop - start));
++    vals.reserve(static_cast<std::size_t>(2 + stop - start));
++    indices.push_back(host_cols[static_cast<std::size_t>(rec)]);
++    vals.push_back(host_fixed_vals[static_cast<std::size_t>(rec)]);
++    vals.push_back(host_c[static_cast<std::size_t>(rec)]);
++    for (std::int32_t p = start; p < stop; ++p) {
++      indices.push_back(host_rows[static_cast<std::size_t>(p)]);
++      vals.push_back(host_coeffs[static_cast<std::size_t>(p)]);
+     }
+     append_postsolve_record(
+-        tape, PostsolveReductionType::FixedCol, indices, vals, PostsolveDualMode::Minimal);
++        *tape, PostsolveReductionType::FixedCol, indices, vals,
++        PostsolveDualMode::Minimal);
+   }
++
++  cudaFree(selected_scan);
++  cudaFree(active_nnz_scan);
++  cudaFree(packed_cols);
++  cudaFree(packed_fixed_vals);
++  cudaFree(packed_c);
++  cudaFree(packed_nnz_starts);
++  cudaFree(packed_rows);
++  cudaFree(packed_coeffs);
++  return static_cast<double>(objective_delta);
+ }
+ 
+ __global__ void _kernel_primal_bound_change_record_counts(std::int32_t* counts,
+@@ -297,35 +446,6 @@ void append_primal_bound_change_tape_gpu(PostsolveTapeGpu& tape,
+   tape = std::move(built);
+ }
+ 
+-double stable_fixed_objective_delta_from_device(const std::uint8_t* fixed_mask,
+-                                                const double* c,
+-                                                const double* fixed_val,
+-                                                std::int32_t n,
+-                                                const char* context) {
+-  std::vector<std::uint8_t> host_fixed_mask(static_cast<std::size_t>(n));
+-  std::vector<double> host_c(static_cast<std::size_t>(n));
+-  std::vector<double> host_fixed_val(static_cast<std::size_t>(n));
+-  throw_if_cuda_error(cudaMemcpy(host_fixed_mask.data(), fixed_mask, static_cast<std::size_t>(n),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_c.data(), c, sizeof(double) * static_cast<std::size_t>(n),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_fixed_val.data(), fixed_val,
+-                                 sizeof(double) * static_cast<std::size_t>(n),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-
+-  long double total = 0.0L;
+-  for (std::int32_t col = 0; col < n; ++col) {
+-    const auto idx = static_cast<std::size_t>(col);
+-    if (host_fixed_mask[idx] != std::uint8_t{0}) {
+-      total += static_cast<long double>(host_c[idx]) * static_cast<long double>(host_fixed_val[idx]);
+-    }
+-  }
+-  return static_cast<double>(total);
+-}
+-
+ __device__ double atomic_max_double(double* address, double value) {
+   auto* address_as_ull = reinterpret_cast<unsigned long long int*>(address);
+   unsigned long long int old = *address_as_ull;
+@@ -487,6 +607,94 @@ __global__ void _kernel_primal_propagation_candidates(std::int32_t* infeasible_f
+   (void)infeasible_flag;
+ }
+ 
++__global__ void _kernel_primal_propagation_candidates_block(
++    std::int32_t* infeasible_flag,
++    double* candidate_l,
++    double* candidate_u,
++    const double* row_min_fin,
++    const double* row_max_fin,
++    const std::int32_t* row_min_neg_inf_count,
++    const std::int32_t* row_max_pos_inf_count,
++    const std::uint8_t* keep_row,
++    const std::int32_t* row_nnz,
++    const double* AL,
++    const double* AU,
++    const double* l_cur,
++    const double* u_cur,
++    const std::int32_t* row_ptr,
++    const std::int32_t* col_val,
++    const double* nz_val,
++    double zero_tol,
++    std::int32_t m) {
++  const std::int32_t i = static_cast<std::int32_t>(blockIdx.x);
++  if (i >= m || keep_row[i] == std::uint8_t{0} || row_nnz[i] <= 1) {
++    return;
++  }
++
++  const std::int32_t row_start = row_ptr[i];
++  const std::int32_t row_stop = row_ptr[i + 1];
++  const double lower_i = AL[i];
++  const double upper_i = AU[i];
++  const double row_min_fin_i = row_min_fin[i];
++  const double row_max_fin_i = row_max_fin[i];
++  const std::int32_t row_min_neg_inf_count_i = row_min_neg_inf_count[i];
++  const std::int32_t row_max_pos_inf_count_i = row_max_pos_inf_count[i];
++  for (std::int32_t p = row_start + static_cast<std::int32_t>(threadIdx.x);
++       p < row_stop;
++       p += static_cast<std::int32_t>(blockDim.x)) {
++    const std::int32_t j = col_val[p];
++    const double a = nz_val[p];
++    if (fabs(a) <= zero_tol) {
++      continue;
++    }
++
++    const double old_l = l_cur[j];
++    const double old_u = u_cur[j];
++    double term_min = 0.0;
++    double term_max = 0.0;
++    _term_interval_primal_propagation(a, old_l, old_u, &term_min, &term_max);
++
++    const double rest_min = _row_residual_min_from_summary(
++        row_min_fin_i, row_min_neg_inf_count_i, term_min);
++    const double rest_max = _row_residual_max_from_summary(
++        row_max_fin_i, row_max_pos_inf_count_i, term_max);
++
++    double implied_l = -INFINITY;
++    double implied_u = INFINITY;
++    if (a > 0.0) {
++      if (isfinite(lower_i) && isfinite(rest_max)) {
++        implied_l = (lower_i - rest_max) / a;
++      }
++      if (isfinite(upper_i) && isfinite(rest_min)) {
++        implied_u = (upper_i - rest_min) / a;
++      }
++    } else {
++      if (isfinite(upper_i) && isfinite(rest_min)) {
++        implied_l = (upper_i - rest_min) / a;
++      }
++      if (isfinite(lower_i) && isfinite(rest_max)) {
++        implied_u = (lower_i - rest_max) / a;
++      }
++    }
++
++    double new_l = old_l;
++    double new_u = old_u;
++    if (isfinite(implied_l)) {
++      new_l = fmax(new_l, implied_l);
++    }
++    if (isfinite(implied_u)) {
++      new_u = fmin(new_u, implied_u);
++    }
++    if (new_l > old_l) {
++      atomic_max_double(&candidate_l[j], new_l);
++    }
++    if (new_u < old_u) {
++      atomic_min_double(&candidate_u[j], new_u);
++    }
++  }
++  (void)infeasible_flag;
++}
++
+ __global__ void _kernel_finalize_primal_propagation(std::int32_t* flags,
+                                                     double* finalized_l,
+                                                     double* finalized_u,
+@@ -621,9 +829,11 @@ __global__ void _kernel_apply_primal_bounds_and_fixed(std::uint8_t* keep_col,
+   }
+ }
+ 
+-__global__ void _kernel_capture_primal_propagation_support_rows(
++__global__ void _kernel_capture_primal_propagation_support_rows_by_col(
+     std::int32_t* support_l_row,
+     std::int32_t* support_u_row,
++    const std::uint8_t* lower_changed,
++    const std::uint8_t* upper_changed,
+     const double* candidate_l,
+     const double* candidate_u,
+     const double* row_min_fin,
+@@ -636,76 +846,71 @@ __global__ void _kernel_capture_primal_propagation_support_rows(
+     const double* AU,
+     const double* l_cur,
+     const double* u_cur,
+-    const std::int32_t* row_ptr,
+-    const std::int32_t* col_val,
+-    const double* nz_val,
++    const std::int32_t* at_row_ptr,
++    const std::int32_t* at_col_val,
++    const double* at_nz_val,
+     double zero_tol,
+     double tol,
+     double support_tol,
+-    std::int32_t m) {
+-  const std::int32_t i = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+-  if (i >= m || keep_row[i] == std::uint8_t{0} || row_nnz[i] <= 1) {
++    std::int32_t n) {
++  const std::int32_t j = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (j >= n) {
+     return;
+   }
+-
+-  const std::int32_t row_start = row_ptr[i];
+-  const std::int32_t row_stop = row_ptr[i + 1];
+-  const double lower_i = AL[i];
+-  const double upper_i = AU[i];
+-  const double row_min_fin_i = row_min_fin[i];
+-  const double row_max_fin_i = row_max_fin[i];
+-  const std::int32_t row_min_neg_inf_count_i = row_min_neg_inf_count[i];
+-  const std::int32_t row_max_pos_inf_count_i = row_max_pos_inf_count[i];
+-  for (std::int32_t p = row_start; p < row_stop; ++p) {
+-    const std::int32_t j = col_val[p];
+-    const double a = nz_val[p];
+-    if (fabs(a) <= zero_tol) {
+-      continue;
+-    }
+-
++  std::int32_t support_l = INT_MAX;
++  std::int32_t support_u = INT_MAX;
++  const bool need_l = lower_changed[j] != std::uint8_t{0};
++  const bool need_u = upper_changed[j] != std::uint8_t{0};
++  if (need_l || need_u) {
+     const double old_l = l_cur[j];
+     const double old_u = u_cur[j];
+-    double term_min = 0.0;
+-    double term_max = 0.0;
+-    _term_interval_primal_propagation(a, old_l, old_u, &term_min, &term_max);
+-
+-    const double rest_min = _row_residual_min_from_summary(
+-        row_min_fin_i,
+-        row_min_neg_inf_count_i,
+-        term_min);
+-    const double rest_max = _row_residual_max_from_summary(
+-        row_max_fin_i,
+-        row_max_pos_inf_count_i,
+-        term_max);
+-
+-    double implied_l = -INFINITY;
+-    double implied_u = INFINITY;
+-    if (a > 0.0) {
+-      if (isfinite(lower_i) && isfinite(rest_max)) {
+-        implied_l = (lower_i - rest_max) / a;
++    const double cand_l = candidate_l[j];
++    const double cand_u = candidate_u[j];
++    for (std::int32_t p = at_row_ptr[j]; p < at_row_ptr[j + 1]; ++p) {
++      const std::int32_t i = at_col_val[p];
++      if (keep_row[i] == std::uint8_t{0} || row_nnz[i] <= 1) {
++        continue;
+       }
+-      if (isfinite(upper_i) && isfinite(rest_min)) {
+-        implied_u = (upper_i - rest_min) / a;
++      const double a = at_nz_val[p];
++      if (fabs(a) <= zero_tol) {
++        continue;
+       }
+-    } else {
+-      if (isfinite(upper_i) && isfinite(rest_min)) {
+-        implied_l = (upper_i - rest_min) / a;
++      double term_min = 0.0;
++      double term_max = 0.0;
++      _term_interval_primal_propagation(a, old_l, old_u, &term_min, &term_max);
++      const double rest_min = _row_residual_min_from_summary(
++          row_min_fin[i], row_min_neg_inf_count[i], term_min);
++      const double rest_max = _row_residual_max_from_summary(
++          row_max_fin[i], row_max_pos_inf_count[i], term_max);
++      double implied_l = -INFINITY;
++      double implied_u = INFINITY;
++      if (a > 0.0) {
++        if (isfinite(AL[i]) && isfinite(rest_max)) {
++          implied_l = (AL[i] - rest_max) / a;
++        }
++        if (isfinite(AU[i]) && isfinite(rest_min)) {
++          implied_u = (AU[i] - rest_min) / a;
++        }
++      } else {
++        if (isfinite(AU[i]) && isfinite(rest_min)) {
++          implied_l = (AU[i] - rest_min) / a;
++        }
++        if (isfinite(AL[i]) && isfinite(rest_max)) {
++          implied_u = (AL[i] - rest_max) / a;
++        }
+       }
+-      if (isfinite(lower_i) && isfinite(rest_max)) {
+-        implied_u = (lower_i - rest_max) / a;
++      if (need_l && cand_l > old_l + tol && isfinite(implied_l) &&
++          fabs(implied_l - cand_l) <= support_tol) {
++        support_l = min(support_l, i);
++      }
++      if (need_u && cand_u < old_u - tol && isfinite(implied_u) &&
++          fabs(implied_u - cand_u) <= support_tol) {
++        support_u = min(support_u, i);
+       }
+-    }
+-
+-    const double cand_l = candidate_l[j];
+-    if (cand_l > old_l + tol && isfinite(implied_l) && fabs(implied_l - cand_l) <= support_tol) {
+-      atomicMin(&support_l_row[j], i);
+-    }
+-
+-    const double cand_u = candidate_u[j];
+-    if (cand_u < old_u - tol && isfinite(implied_u) && fabs(implied_u - cand_u) <= support_tol) {
+-      atomicMin(&support_u_row[j], i);
+     }
+   }
++  support_l_row[j] = support_l;
++  support_u_row[j] = support_u;
+ }
+ 
+ __global__ void _kernel_primal_fixed_row_shift(double* row_shift,
+@@ -796,7 +1001,6 @@ void apply_rule_primal_propagation(PresolvePlanGpu& plan,
+   if (m == 0 || n == 0) {
+     return;
+   }
+-
+   double* candidate_l = nullptr;
+   double* candidate_u = nullptr;
+   double* finalized_l = nullptr;
+@@ -853,26 +1057,25 @@ void apply_rule_primal_propagation(PresolvePlanGpu& plan,
+       pparams.zero_tol);
+ 
+   const int blocks_m = (m + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+-  _kernel_primal_propagation_candidates<<<blocks_m, GPU_PRESOLVE_THREADS>>>(
+-      flags_device,
+-      candidate_l,
+-      candidate_u,
+-      row_min_fin,
+-      row_max_fin,
+-      row_min_neg_inf_count,
+-      row_max_pos_inf_count,
+-      plan.keep_row_mask,
+-      stats.row_nnz,
+-      plan.new_AL,
+-      plan.new_AU,
+-      plan.new_l,
+-      plan.new_u,
+-      lp.A.rowPtr,
+-      lp.A.colVal,
+-      lp.A.nzVal,
+-      pparams.zero_tol,
+-      m);
+-  throw_if_cuda_error(cudaGetLastError(), "_kernel_primal_propagation_candidates");
++  const bool use_block_per_row =
++      static_cast<std::int64_t>(lp.A.nnz) > 32LL * static_cast<std::int64_t>(m);
++  if (use_block_per_row) {
++    _kernel_primal_propagation_candidates_block<<<m, GPU_PRESOLVE_THREADS>>>(
++        flags_device, candidate_l, candidate_u, row_min_fin, row_max_fin,
++        row_min_neg_inf_count, row_max_pos_inf_count, plan.keep_row_mask,
++        stats.row_nnz, plan.new_AL, plan.new_AU, plan.new_l, plan.new_u,
++        lp.A.rowPtr, lp.A.colVal, lp.A.nzVal, pparams.zero_tol, m);
++    throw_if_cuda_error(cudaGetLastError(),
++                        "_kernel_primal_propagation_candidates_block");
++  } else {
++    _kernel_primal_propagation_candidates<<<blocks_m, GPU_PRESOLVE_THREADS>>>(
++        flags_device, candidate_l, candidate_u, row_min_fin, row_max_fin,
++        row_min_neg_inf_count, row_max_pos_inf_count, plan.keep_row_mask,
++        stats.row_nnz, plan.new_AL, plan.new_AU, plan.new_l, plan.new_u,
++        lp.A.rowPtr, lp.A.colVal, lp.A.nzVal, pparams.zero_tol, m);
++    throw_if_cuda_error(cudaGetLastError(),
++                        "_kernel_primal_propagation_candidates");
++  }
+ 
+   compute_col_max_abs(col_max_abs, lp.AT);
+ 
+@@ -926,19 +1129,12 @@ void apply_rule_primal_propagation(PresolvePlanGpu& plan,
+                           "cudaMalloc primal support_l_row");
+       throw_if_cuda_error(cudaMalloc(&support_u_row, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
+                           "cudaMalloc primal support_u_row");
+-      std::vector<std::int32_t> host_support_init(static_cast<std::size_t>(n), INT_MAX);
+-      throw_if_cuda_error(cudaMemcpy(support_l_row, host_support_init.data(),
+-                                     sizeof(std::int32_t) * static_cast<std::size_t>(n),
+-                                     cudaMemcpyHostToDevice),
+-                          "cudaMemcpy primal support_l_row init");
+-      throw_if_cuda_error(cudaMemcpy(support_u_row, host_support_init.data(),
+-                                     sizeof(std::int32_t) * static_cast<std::size_t>(n),
+-                                     cudaMemcpyHostToDevice),
+-                          "cudaMemcpy primal support_u_row init");
+       const double support_tol = fmax(10.0 * pparams.bound_tol, 1.0e-10);
+-      _kernel_capture_primal_propagation_support_rows<<<blocks_m, GPU_PRESOLVE_THREADS>>>(
++      _kernel_capture_primal_propagation_support_rows_by_col<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
+           support_l_row,
+           support_u_row,
++          lower_changed,
++          upper_changed,
+           finalized_l,
+           finalized_u,
+           row_min_fin,
+@@ -951,14 +1147,15 @@ void apply_rule_primal_propagation(PresolvePlanGpu& plan,
+           plan.new_AU,
+           plan.new_l,
+           plan.new_u,
+-          lp.A.rowPtr,
+-          lp.A.colVal,
+-          lp.A.nzVal,
++          lp.AT.rowPtr,
++          lp.AT.colVal,
++          lp.AT.nzVal,
+           pparams.zero_tol,
+           pparams.bound_tol,
+           support_tol,
+-          m);
+-      throw_if_cuda_error(cudaGetLastError(), "_kernel_capture_primal_propagation_support_rows");
++          n);
++      throw_if_cuda_error(cudaGetLastError(),
++                          "_kernel_capture_primal_propagation_support_rows_by_col");
+       throw_if_cuda_error(cudaDeviceSynchronize(), "capture primal support rows synchronize");
+ 
+       if (!pparams.record_postsolve_tape_cpu) {
+@@ -1106,23 +1303,17 @@ void apply_rule_primal_propagation(PresolvePlanGpu& plan,
+     if (flags[3] != 0) {
+       plan.has_infeasible = true;
+     } else {
+-      if (pparams.record_postsolve_tape && flags[2] != 0) {
+-        append_fixed_col_tape_from_device(plan.tape,
+-                                          fixed_mask,
+-                                          fixed_val,
+-                                          plan.keep_row_mask,
+-                                          plan.new_c,
+-                                          lp.AT,
+-                                          m,
+-                                          n,
+-                                          "cudaMemcpy primal fixed-col tape");
+-      }
+-      const double obj_delta = stable_fixed_objective_delta_from_device(
+-          fixed_mask,
+-          plan.new_c,
+-          fixed_val,
+-          n,
+-          "cudaMemcpy primal fixed objective delta");
++      const double obj_delta = flags[2] != 0
++          ? append_primal_fixed_col_tape_compacted_from_device(
++                pparams.record_postsolve_tape ? &plan.tape : nullptr,
++                fixed_mask,
++                fixed_val,
++                plan.keep_row_mask,
++                plan.new_c,
++                lp.AT,
++                n,
++                "primal compacted fixed-col tape/objective")
++          : 0.0;
+       plan.obj_constant_delta += obj_delta;
+       plan.has_row_action = true;
+       plan.has_col_action = plan.has_col_action || flags[2] != 0;
+diff --git a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_singleton_cols.cu b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_singleton_cols.cu
+index b84ef4e..88e94d9 100644
+--- a/HPR-LP-C-SpMVOp-05f9150-source/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_singleton_cols.cu
++++ b/HPR-LP-C-SpMVOp-05f9150-presolve-combined/third_party/GPU-Presolver-C/cpp/src/presolve/rules/rule_singleton_cols.cu
+@@ -49,10 +49,10 @@ void inclusive_scan_i32(std::int32_t* values, std::int32_t n, const char* contex
+   std::size_t temp_bytes = 0;
+   throw_if_cuda_error(cub::DeviceScan::InclusiveSum(temp_storage, temp_bytes, values, values, n),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&temp_storage, temp_bytes), context);
++  throw_if_cuda_error(cudaMallocAsync(&temp_storage, temp_bytes, nullptr), context);
+   throw_if_cuda_error(cub::DeviceScan::InclusiveSum(temp_storage, temp_bytes, values, values, n),
+                       context);
+-  cudaFree(temp_storage);
++  cudaFreeAsync(temp_storage, nullptr);
+ }
+ 
+ double sum_device_double(const double* values, std::int32_t n, const char* context) {
+@@ -63,16 +63,16 @@ double sum_device_double(const double* values, std::int32_t n, const char* conte
+   std::size_t temp_bytes = 0;
+   double* result_device = nullptr;
+   double result = 0.0;
+-  throw_if_cuda_error(cudaMalloc(&result_device, sizeof(double)), context);
++  throw_if_cuda_error(cudaMallocAsync(&result_device, sizeof(double), nullptr), context);
+   throw_if_cuda_error(cub::DeviceReduce::Sum(temp_storage, temp_bytes, values, result_device, n),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&temp_storage, temp_bytes), context);
++  throw_if_cuda_error(cudaMallocAsync(&temp_storage, temp_bytes, nullptr), context);
+   throw_if_cuda_error(cub::DeviceReduce::Sum(temp_storage, temp_bytes, values, result_device, n),
+                       context);
+   throw_if_cuda_error(cudaMemcpy(&result, result_device, sizeof(double), cudaMemcpyDeviceToHost),
+                       context);
+-  cudaFree(temp_storage);
+-  cudaFree(result_device);
++  cudaFreeAsync(temp_storage, nullptr);
++  cudaFreeAsync(result_device, nullptr);
+   return result;
+ }
+ 
+@@ -269,6 +269,8 @@ __device__ std::uint8_t _singleton_col_ineq_action(double cj,
+ 
+ __global__ void _kernel_singleton_col_row_owner(std::int32_t* status_flag,
+                                                 std::int32_t* row_owner,
++                                                double* rest_min_cache,
++                                                double* rest_max_cache,
+                                                 const std::uint8_t* keep_row,
+                                                 const std::uint8_t* keep_col,
+                                                 const std::uint8_t* singleton_mask,
+@@ -370,6 +372,8 @@ __global__ void _kernel_singleton_col_row_owner(std::int32_t* status_flag,
+         }
+       }
+     }
++    rest_min_cache[j] = rest_min;
++    rest_max_cache[j] = rest_max;
+     atomicMin(&row_owner[row], j);
+   }
+ }
+@@ -429,11 +433,8 @@ __global__ void _kernel_process_singleton_cols(std::int32_t* status_flag,
+ 
+     const std::int32_t row_start = row_ptr[row];
+     const std::int32_t row_stop = row_ptr[row + 1];
+-    double rest_min = 0.0;
+-    double rest_max = 0.0;
+-    if (!_singleton_col_activity_bounds(row_start, row_stop, j, keep_col, col_val, nz_val, l_cur, u_cur, &rest_min, &rest_max)) {
+-      return;
+-    }
++    const double rest_min = chosen_side[j];
++    const double rest_max = obj_contrib[j];
+ 
+     const bool is_eq_row = isfinite(lhs) && isfinite(rhs) && fabs(lhs - rhs) <= tol;
+     if (is_eq_row) {
+@@ -552,51 +553,48 @@ __global__ void _kernel_apply_singleton_cols(std::uint8_t* keep_row,
+   }
+ }
+ 
++__global__ void _kernel_zero_non_deleted_obj_contrib(double* obj_contrib,
++                                                     const std::uint8_t* col_delete,
++                                                     std::int32_t n) {
++  const std::int32_t col = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
++  if (col < n && col_delete[col] == std::uint8_t{0}) {
++    obj_contrib[col] = 0.0;
++  }
++}
++
+ __global__ void _kernel_singleton_subcol_tape_counts(std::int32_t* selected_scan,
+                                                      std::int32_t* support_scan,
+                                                      const std::uint8_t* col_delete,
+                                                      const std::int32_t* pair_row,
+-                                                     const std::uint8_t* keep_col,
++                                                     const double* singleton_val,
+                                                      const std::int32_t* row_ptr,
+-                                                     const std::int32_t* col_val,
++                                                     double zero_tol,
+                                                      std::int32_t m,
+                                                      std::int32_t n) {
+   const std::int32_t col = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+   if (col < n) {
+     const std::int32_t row = pair_row[col];
+-    const bool selected =
+-        col_delete[col] != std::uint8_t{0} && row >= 0 && row < m;
++    const bool selected = col_delete[col] != std::uint8_t{0} && row >= 0 && row < m &&
++                          fabs(singleton_val[col]) > zero_tol;
+     selected_scan[col] = selected ? 1 : 0;
+-    std::int32_t support_count = 0;
+-    if (selected) {
+-      for (std::int32_t p = row_ptr[row]; p < row_ptr[row + 1]; ++p) {
+-        const std::int32_t row_col = col_val[p];
+-        if (row_col != col && keep_col[row_col] != std::uint8_t{0}) {
+-          ++support_count;
+-        }
+-      }
+-    }
++    const std::int32_t support_count = selected ? row_ptr[row + 1] - row_ptr[row] - 1 : 0;
+     support_scan[col] = support_count;
+   }
+ }
+ 
+-__global__ void _kernel_singleton_pack_subcol_tape(std::int32_t* packed_cols,
+-                                                   std::int32_t* packed_rows,
+-                                                   std::int32_t* packed_support_starts,
+-                                                   std::int32_t* packed_support_cols,
+-                                                   double* packed_support_coeffs,
+-                                                   double* packed_pivot,
+-                                                   double* packed_chosen_side,
+-                                                   double* packed_l,
+-                                                   double* packed_u,
+-                                                   double* packed_c,
+-                                                   double* packed_row_deleted,
++__global__ void _kernel_singleton_pack_subcol_tape(std::int32_t* types,
++                                                   std::int32_t* index_starts,
++                                                   std::int32_t* value_starts,
++                                                   std::uint8_t* dual_modes,
++                                                   std::int32_t* indices,
++                                                   double* vals,
+                                                    const std::int32_t* selected_scan,
+                                                    const std::int32_t* support_scan,
+                                                    const std::uint8_t* col_delete,
+                                                    const std::uint8_t* row_delete,
+                                                    const std::uint8_t* keep_col,
+                                                    const std::int32_t* pair_row,
++                                                   const double* singleton_val,
+                                                    const double* chosen_side,
+                                                    const double* c,
+                                                    const double* l,
+@@ -622,36 +620,41 @@ __global__ void _kernel_singleton_pack_subcol_tape(std::int32_t* packed_cols,
+ 
+   const std::int32_t support_start = col == 0 ? 0 : support_scan[col - 1];
+   const std::int32_t support_stop = support_scan[col];
+-  packed_cols[record] = col;
+-  packed_rows[record] = row;
+-  packed_support_starts[record + 1] = support_stop;
+-  packed_chosen_side[record] = chosen_side[col];
+-  packed_l[record] = l[col];
+-  packed_u[record] = u[col];
+-  packed_c[record] = c[col];
+-  packed_row_deleted[record] = row_delete[row] != std::uint8_t{0} ? 1.0 : 0.0;
+-
+-  double pivot = 0.0;
+-  std::int32_t out = support_start;
++  const std::int32_t support_count = support_stop - support_start;
++  const std::int32_t index_start = 3 * record + support_start;
++  const std::int32_t value_start = 6 * record + support_start;
++  types[record] = static_cast<std::int32_t>(PostsolveReductionType::SubCol);
++  index_starts[record] = index_start;
++  value_starts[record] = value_start;
++  dual_modes[record] = static_cast<std::uint8_t>(PostsolveDualMode::Minimal);
++  indices[index_start] = col;
++  indices[index_start + 1] = row;
++  indices[index_start + 2] = support_count;
++  vals[value_start + 1] = chosen_side[col];
++  vals[value_start + 2] = l[col];
++  vals[value_start + 3] = u[col];
++  vals[value_start + 4] = c[col];
++  vals[value_start + 5] = row_delete[row] != std::uint8_t{0} ? 1.0 : 0.0;
++  std::int32_t out = 0;
+   for (std::int32_t p = row_ptr[row]; p < row_ptr[row + 1]; ++p) {
+     const std::int32_t row_col = col_val[p];
+     const double coeff = nz_val[p];
+-    if (row_col == col) {
+-      pivot = coeff;
+-    } else if (keep_col[row_col] != std::uint8_t{0} && out < support_stop) {
+-      packed_support_cols[out] = row_col;
+-      packed_support_coeffs[out] = coeff;
++    if (row_col != col && keep_col[row_col] != std::uint8_t{0} && out < support_count) {
++      indices[index_start + 3 + out] = row_col;
++      vals[value_start + 6 + out] = coeff;
+       ++out;
+     }
+   }
+-  packed_pivot[record] = pivot;
++  vals[value_start] = singleton_val[col];
+ }
+ 
+-void append_subcol_tape_compacted_from_device(PostsolveTape& tape,
++void append_subcol_tape_compacted_from_device(PostsolveTapeGpu& tape,
++                                              PostsolveTape& tape_cpu,
+                                               const std::uint8_t* col_delete,
+                                               const std::uint8_t* row_delete,
+                                               const std::uint8_t* keep_col,
+                                               const std::int32_t* pair_row,
++                                              const double* singleton_val,
+                                               const double* chosen_side,
+                                               const double* c,
+                                               const double* l,
+@@ -667,9 +670,9 @@ void append_subcol_tape_compacted_from_device(PostsolveTape& tape,
+ 
+   std::int32_t* selected_scan = nullptr;
+   std::int32_t* support_scan = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&selected_scan, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++  throw_if_cuda_error(cudaMallocAsync(&selected_scan, sizeof(std::int32_t) * static_cast<std::size_t>(n), nullptr),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&support_scan, sizeof(std::int32_t) * static_cast<std::size_t>(n)),
++  throw_if_cuda_error(cudaMallocAsync(&support_scan, sizeof(std::int32_t) * static_cast<std::size_t>(n), nullptr),
+                       context);
+ 
+   const int blocks_n = (n + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+@@ -678,9 +681,9 @@ void append_subcol_tape_compacted_from_device(PostsolveTape& tape,
+       support_scan,
+       col_delete,
+       pair_row,
+-      keep_col,
++      singleton_val,
+       A.rowPtr,
+-      A.colVal,
++      zero_tol,
+       m,
+       n);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_singleton_subcol_tape_counts");
+@@ -697,69 +700,48 @@ void append_subcol_tape_compacted_from_device(PostsolveTape& tape,
+   const std::int32_t record_count = counts[0];
+   const std::int32_t support_nnz = counts[1];
+   if (record_count <= 0) {
+-    cudaFree(selected_scan);
+-    cudaFree(support_scan);
++    cudaFreeAsync(selected_scan, nullptr);
++    cudaFreeAsync(support_scan, nullptr);
+     return;
+   }
+ 
+-  std::int32_t* packed_cols = nullptr;
+-  std::int32_t* packed_rows = nullptr;
+-  std::int32_t* packed_support_starts = nullptr;
+-  std::int32_t* packed_support_cols = nullptr;
+-  double* packed_support_coeffs = nullptr;
+-  double* packed_pivot = nullptr;
+-  double* packed_chosen_side = nullptr;
+-  double* packed_l = nullptr;
+-  double* packed_u = nullptr;
+-  double* packed_c = nullptr;
+-  double* packed_row_deleted = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&packed_cols, sizeof(std::int32_t) * static_cast<std::size_t>(record_count)),
+-                      context);
+-  throw_if_cuda_error(cudaMalloc(&packed_rows, sizeof(std::int32_t) * static_cast<std::size_t>(record_count)),
++  PostsolveTapeGpu built;
++  built.record_count = record_count;
++  built.index_count = 3 * record_count + support_nnz;
++  built.value_count = 6 * record_count + support_nnz;
++  throw_if_cuda_error(cudaMalloc(&built.types,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(record_count)),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&packed_support_starts,
++  throw_if_cuda_error(cudaMalloc(&built.index_starts,
+                                  sizeof(std::int32_t) * static_cast<std::size_t>(record_count + 1)),
+                       context);
+-  throw_if_cuda_error(cudaMemset(packed_support_starts, 0, sizeof(std::int32_t)), context);
+-  throw_if_cuda_error(cudaMalloc(&packed_pivot, sizeof(double) * static_cast<std::size_t>(record_count)),
+-                      context);
+-  throw_if_cuda_error(cudaMalloc(&packed_chosen_side, sizeof(double) * static_cast<std::size_t>(record_count)),
+-                      context);
+-  throw_if_cuda_error(cudaMalloc(&packed_l, sizeof(double) * static_cast<std::size_t>(record_count)),
++  throw_if_cuda_error(cudaMalloc(&built.value_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(record_count + 1)),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&packed_u, sizeof(double) * static_cast<std::size_t>(record_count)),
++  throw_if_cuda_error(cudaMalloc(&built.dual_modes,
++                                 static_cast<std::size_t>(record_count)),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&packed_c, sizeof(double) * static_cast<std::size_t>(record_count)),
++  throw_if_cuda_error(cudaMalloc(&built.indices,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(built.index_count)),
+                       context);
+-  throw_if_cuda_error(cudaMalloc(&packed_row_deleted, sizeof(double) * static_cast<std::size_t>(record_count)),
++  throw_if_cuda_error(cudaMalloc(&built.vals,
++                                 sizeof(double) * static_cast<std::size_t>(built.value_count)),
+                       context);
+-  if (support_nnz > 0) {
+-    throw_if_cuda_error(cudaMalloc(&packed_support_cols,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(support_nnz)),
+-                        context);
+-    throw_if_cuda_error(cudaMalloc(&packed_support_coeffs,
+-                                   sizeof(double) * static_cast<std::size_t>(support_nnz)),
+-                        context);
+-  }
+ 
+   _kernel_singleton_pack_subcol_tape<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
+-      packed_cols,
+-      packed_rows,
+-      packed_support_starts,
+-      packed_support_cols,
+-      packed_support_coeffs,
+-      packed_pivot,
+-      packed_chosen_side,
+-      packed_l,
+-      packed_u,
+-      packed_c,
+-      packed_row_deleted,
++      built.types,
++      built.index_starts,
++      built.value_starts,
++      built.dual_modes,
++      built.indices,
++      built.vals,
+       selected_scan,
+       support_scan,
+       col_delete,
+       row_delete,
+       keep_col,
+       pair_row,
++      singleton_val,
+       chosen_side,
+       c,
+       l,
+@@ -770,107 +752,41 @@ void append_subcol_tape_compacted_from_device(PostsolveTape& tape,
+       m,
+       n);
+   throw_if_cuda_error(cudaGetLastError(), "_kernel_singleton_pack_subcol_tape");
+-
+-  std::vector<std::int32_t> host_cols(static_cast<std::size_t>(record_count));
+-  std::vector<std::int32_t> host_rows(static_cast<std::size_t>(record_count));
+-  std::vector<std::int32_t> host_support_starts(static_cast<std::size_t>(record_count + 1));
+-  std::vector<std::int32_t> host_support_cols(static_cast<std::size_t>(support_nnz));
+-  std::vector<double> host_support_coeffs(static_cast<std::size_t>(support_nnz));
+-  std::vector<double> host_pivot(static_cast<std::size_t>(record_count));
+-  std::vector<double> host_chosen_side(static_cast<std::size_t>(record_count));
+-  std::vector<double> host_l(static_cast<std::size_t>(record_count));
+-  std::vector<double> host_u(static_cast<std::size_t>(record_count));
+-  std::vector<double> host_c(static_cast<std::size_t>(record_count));
+-  std::vector<double> host_row_deleted(static_cast<std::size_t>(record_count));
+-  throw_if_cuda_error(cudaMemcpy(host_cols.data(), packed_cols,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
++  throw_if_cuda_error(cudaMemcpy(built.index_starts + record_count, &built.index_count,
++                                 sizeof(std::int32_t), cudaMemcpyHostToDevice),
+                       context);
+-  throw_if_cuda_error(cudaMemcpy(host_rows.data(), packed_rows,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_support_starts.data(), packed_support_starts,
+-                                 sizeof(std::int32_t) * static_cast<std::size_t>(record_count + 1),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_pivot.data(), packed_pivot,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_chosen_side.data(), packed_chosen_side,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_l.data(), packed_l,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
++  throw_if_cuda_error(cudaMemcpy(built.value_starts + record_count, &built.value_count,
++                                 sizeof(std::int32_t), cudaMemcpyHostToDevice),
+                       context);
+-  throw_if_cuda_error(cudaMemcpy(host_u.data(), packed_u,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_c.data(), packed_c,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  throw_if_cuda_error(cudaMemcpy(host_row_deleted.data(), packed_row_deleted,
+-                                 sizeof(double) * static_cast<std::size_t>(record_count),
+-                                 cudaMemcpyDeviceToHost),
+-                      context);
+-  if (support_nnz > 0) {
+-    throw_if_cuda_error(cudaMemcpy(host_support_cols.data(), packed_support_cols,
+-                                   sizeof(std::int32_t) * static_cast<std::size_t>(support_nnz),
+-                                   cudaMemcpyDeviceToHost),
+-                        context);
+-    throw_if_cuda_error(cudaMemcpy(host_support_coeffs.data(), packed_support_coeffs,
+-                                   sizeof(double) * static_cast<std::size_t>(support_nnz),
+-                                   cudaMemcpyDeviceToHost),
+-                        context);
+-  }
+ 
+-  for (std::int32_t rec = 0; rec < record_count; ++rec) {
+-    if (fabs(host_pivot[static_cast<std::size_t>(rec)]) <= zero_tol) {
+-      continue;
+-    }
+-    const std::int32_t start = host_support_starts[static_cast<std::size_t>(rec)];
+-    const std::int32_t stop = host_support_starts[static_cast<std::size_t>(rec + 1)];
+-    std::vector<std::int32_t> indices{
+-        host_cols[static_cast<std::size_t>(rec)],
+-        host_rows[static_cast<std::size_t>(rec)],
+-        stop - start};
+-    std::vector<double> vals{
+-        host_pivot[static_cast<std::size_t>(rec)],
+-        host_chosen_side[static_cast<std::size_t>(rec)],
+-        host_l[static_cast<std::size_t>(rec)],
+-        host_u[static_cast<std::size_t>(rec)],
+-        host_c[static_cast<std::size_t>(rec)],
+-        host_row_deleted[static_cast<std::size_t>(rec)]};
+-    for (std::int32_t p = start; p < stop; ++p) {
+-      indices.push_back(host_support_cols[static_cast<std::size_t>(p)]);
+-      vals.push_back(host_support_coeffs[static_cast<std::size_t>(p)]);
+-    }
+-    append_postsolve_record(
+-        tape, PostsolveReductionType::SubCol, indices, vals, PostsolveDualMode::Minimal);
+-  }
++  tape_cpu.types.resize(static_cast<std::size_t>(built.record_count));
++  tape_cpu.index_starts.resize(static_cast<std::size_t>(built.record_count + 1));
++  tape_cpu.value_starts.resize(static_cast<std::size_t>(built.record_count + 1));
++  tape_cpu.dual_modes.resize(static_cast<std::size_t>(built.record_count));
++  tape_cpu.indices.resize(static_cast<std::size_t>(built.index_count));
++  tape_cpu.vals.resize(static_cast<std::size_t>(built.value_count));
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.types.data(), built.types,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(built.record_count),
++                                 cudaMemcpyDeviceToHost), context);
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.index_starts.data(), built.index_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(built.record_count + 1),
++                                 cudaMemcpyDeviceToHost), context);
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.value_starts.data(), built.value_starts,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(built.record_count + 1),
++                                 cudaMemcpyDeviceToHost), context);
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.dual_modes.data(), built.dual_modes,
++                                 static_cast<std::size_t>(built.record_count),
++                                 cudaMemcpyDeviceToHost), context);
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.indices.data(), built.indices,
++                                 sizeof(std::int32_t) * static_cast<std::size_t>(built.index_count),
++                                 cudaMemcpyDeviceToHost), context);
++  throw_if_cuda_error(cudaMemcpy(tape_cpu.vals.data(), built.vals,
++                                 sizeof(double) * static_cast<std::size_t>(built.value_count),
++                                 cudaMemcpyDeviceToHost), context);
+ 
+-  cudaFree(selected_scan);
+-  cudaFree(support_scan);
+-  cudaFree(packed_cols);
+-  cudaFree(packed_rows);
+-  cudaFree(packed_support_starts);
+-  cudaFree(packed_pivot);
+-  cudaFree(packed_chosen_side);
+-  cudaFree(packed_l);
+-  cudaFree(packed_u);
+-  cudaFree(packed_c);
+-  cudaFree(packed_row_deleted);
+-  if (packed_support_cols != nullptr) {
+-    cudaFree(packed_support_cols);
+-  }
+-  if (packed_support_coeffs != nullptr) {
+-    cudaFree(packed_support_coeffs);
+-  }
++  cudaFreeAsync(selected_scan, nullptr);
++  cudaFreeAsync(support_scan, nullptr);
++  tape = std::move(built);
+ }
+ 
+ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+@@ -889,7 +805,7 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+ 
+   const int blocks_n = (n + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+   std::int32_t* singleton_counts_device = nullptr;
+-  throw_if_cuda_error(cudaMalloc(&singleton_counts_device, sizeof(std::int32_t) * 2),
++  throw_if_cuda_error(cudaMallocAsync(&singleton_counts_device, sizeof(std::int32_t) * 2, nullptr),
+                       "cudaMalloc singleton_cols counts");
+   throw_if_cuda_error(cudaMemset(singleton_counts_device, 0, sizeof(std::int32_t) * 2),
+                       "cudaMemset singleton_cols counts");
+@@ -910,7 +826,7 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+                                  sizeof(singleton_counts),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy singleton_cols counts");
+-  cudaFree(singleton_counts_device);
++  cudaFreeAsync(singleton_counts_device, nullptr);
+   const std::int32_t singleton_count = singleton_counts[0];
+   const std::int32_t eq_support_count = singleton_counts[1];
+   if (singleton_count == 0 ||
+@@ -932,18 +848,18 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+   double* AU_new = nullptr;
+   double* obj_contrib = nullptr;
+ 
+-  throw_if_cuda_error(cudaMalloc(&status_flag, sizeof(std::int32_t) * 3), "cudaMalloc singleton_cols status_flag");
+-  throw_if_cuda_error(cudaMalloc(&row_owner, sizeof(std::int32_t) * static_cast<std::size_t>(m)), "cudaMalloc singleton_cols row_owner");
+-  throw_if_cuda_error(cudaMalloc(&col_delete, static_cast<std::size_t>(n)), "cudaMalloc singleton_cols col_delete");
+-  throw_if_cuda_error(cudaMalloc(&row_delete, static_cast<std::size_t>(m)), "cudaMalloc singleton_cols row_delete");
+-  throw_if_cuda_error(cudaMalloc(&row_lhs_change, static_cast<std::size_t>(m)), "cudaMalloc singleton_cols row_lhs_change");
+-  throw_if_cuda_error(cudaMalloc(&row_rhs_change, static_cast<std::size_t>(m)), "cudaMalloc singleton_cols row_rhs_change");
+-  throw_if_cuda_error(cudaMalloc(&pair_row, sizeof(std::int32_t) * static_cast<std::size_t>(n)), "cudaMalloc singleton_cols pair_row");
+-  throw_if_cuda_error(cudaMalloc(&chosen_side, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc singleton_cols chosen_side");
+-  throw_if_cuda_error(cudaMalloc(&c_new, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc singleton_cols c_new");
+-  throw_if_cuda_error(cudaMalloc(&AL_new, sizeof(double) * static_cast<std::size_t>(m)), "cudaMalloc singleton_cols AL_new");
+-  throw_if_cuda_error(cudaMalloc(&AU_new, sizeof(double) * static_cast<std::size_t>(m)), "cudaMalloc singleton_cols AU_new");
+-  throw_if_cuda_error(cudaMalloc(&obj_contrib, sizeof(double) * static_cast<std::size_t>(n)), "cudaMalloc singleton_cols obj_contrib");
++  throw_if_cuda_error(cudaMallocAsync(&status_flag, sizeof(std::int32_t) * 3, nullptr), "cudaMallocAsync singleton_cols status_flag");
++  throw_if_cuda_error(cudaMallocAsync(&row_owner, sizeof(std::int32_t) * static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols row_owner");
++  throw_if_cuda_error(cudaMallocAsync(&col_delete, static_cast<std::size_t>(n), nullptr), "cudaMallocAsync singleton_cols col_delete");
++  throw_if_cuda_error(cudaMallocAsync(&row_delete, static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols row_delete");
++  throw_if_cuda_error(cudaMallocAsync(&row_lhs_change, static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols row_lhs_change");
++  throw_if_cuda_error(cudaMallocAsync(&row_rhs_change, static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols row_rhs_change");
++  throw_if_cuda_error(cudaMallocAsync(&pair_row, sizeof(std::int32_t) * static_cast<std::size_t>(n), nullptr), "cudaMallocAsync singleton_cols pair_row");
++  throw_if_cuda_error(cudaMallocAsync(&chosen_side, sizeof(double) * static_cast<std::size_t>(n), nullptr), "cudaMallocAsync singleton_cols chosen_side");
++  throw_if_cuda_error(cudaMallocAsync(&c_new, sizeof(double) * static_cast<std::size_t>(n), nullptr), "cudaMallocAsync singleton_cols c_new");
++  throw_if_cuda_error(cudaMallocAsync(&AL_new, sizeof(double) * static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols AL_new");
++  throw_if_cuda_error(cudaMallocAsync(&AU_new, sizeof(double) * static_cast<std::size_t>(m), nullptr), "cudaMallocAsync singleton_cols AU_new");
++  throw_if_cuda_error(cudaMallocAsync(&obj_contrib, sizeof(double) * static_cast<std::size_t>(n), nullptr), "cudaMallocAsync singleton_cols obj_contrib");
+   throw_if_cuda_error(cudaMemset(status_flag, 0, sizeof(std::int32_t) * 3), "cudaMemset singleton_cols status_flag");
+   throw_if_cuda_error(cudaMemset(col_delete, 0, static_cast<std::size_t>(n)), "cudaMemset singleton_cols col_delete");
+   throw_if_cuda_error(cudaMemset(row_delete, 0, static_cast<std::size_t>(m)), "cudaMemset singleton_cols row_delete");
+@@ -965,6 +881,8 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+   _kernel_singleton_col_row_owner<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
+       status_flag,
+       row_owner,
++      chosen_side,
++      obj_contrib,
+       plan.keep_row_mask,
+       plan.keep_col_mask,
+       stats.singleton_col_mask,
+@@ -1026,14 +944,19 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+     if (status[0] != 0) {
+       plan.has_unbounded = true;
+     } else if (status[1] != 0 || status[2] != 0) {
++      _kernel_zero_non_deleted_obj_contrib<<<blocks_n, GPU_PRESOLVE_THREADS>>>(
++          obj_contrib, col_delete, n);
++      throw_if_cuda_error(cudaGetLastError(), "_kernel_zero_non_deleted_obj_contrib");
+       const std::int32_t max_mn = m > n ? m : n;
+       const int blocks_mn = (max_mn + GPU_PRESOLVE_THREADS - 1) / GPU_PRESOLVE_THREADS;
+       if (status[1] != 0 && rule_mode == SINGLETON_COL_RULE_EQ && pparams.record_postsolve_tape) {
+-        append_subcol_tape_compacted_from_device(plan.tape,
++        append_subcol_tape_compacted_from_device(plan.tape_gpu,
++                                                 plan.tape,
+                                                  col_delete,
+                                                  row_delete,
+                                                  plan.keep_col_mask,
+                                                  pair_row,
++                                                 stats.singleton_col_val,
+                                                  chosen_side,
+                                                  plan.new_c,
+                                                  plan.new_l,
+@@ -1041,6 +964,7 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+                                                  lp.A,
+                                                  pparams.zero_tol,
+                                                  "cudaMemcpy singleton compact SubCol tape");
++        plan.tape_gpu_mirrors_cpu = true;
+       }
+       if (status[2] != 0 && rule_mode == SINGLETON_COL_RULE_DUAL_INFER &&
+           pparams.record_postsolve_tape) {
+@@ -1073,18 +997,18 @@ void apply_rule_singleton_cols_mode(PresolvePlanGpu& plan,
+     }
+   }
+ 
+-  cudaFree(status_flag);
+-  cudaFree(row_owner);
+-  cudaFree(col_delete);
+-  cudaFree(row_delete);
+-  cudaFree(row_lhs_change);
+-  cudaFree(row_rhs_change);
+-  cudaFree(pair_row);
+-  cudaFree(chosen_side);
+-  cudaFree(c_new);
+-  cudaFree(AL_new);
+-  cudaFree(AU_new);
+-  cudaFree(obj_contrib);
++  cudaFreeAsync(status_flag, nullptr);
++  cudaFreeAsync(row_owner, nullptr);
++  cudaFreeAsync(col_delete, nullptr);
++  cudaFreeAsync(row_delete, nullptr);
++  cudaFreeAsync(row_lhs_change, nullptr);
++  cudaFreeAsync(row_rhs_change, nullptr);
++  cudaFreeAsync(pair_row, nullptr);
++  cudaFreeAsync(chosen_side, nullptr);
++  cudaFreeAsync(c_new, nullptr);
++  cudaFreeAsync(AL_new, nullptr);
++  cudaFreeAsync(AU_new, nullptr);
++  cudaFreeAsync(obj_contrib, nullptr);
+ }
+ 
+ }  // namespace

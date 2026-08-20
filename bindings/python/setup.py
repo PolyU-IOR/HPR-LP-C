@@ -257,7 +257,6 @@ class CMakeBuild(build_ext):
             '-DBUILD_PYTHON_BINDINGS=ON',
             '-DBUILD_SHARED_LIB=ON',  # Python bindings need shared library
             '-DBUILD_STATIC_LIB=OFF',  # Don't need static for Python
-            '-DBUILD_EXAMPLES=OFF',    # Don't build examples during pip install
         ]
 
         cuda_architectures = detect_cuda_architectures()
@@ -434,7 +433,7 @@ long_description = readme_path.read_text(encoding='utf-8') if readme_path.exists
 
 setup(
     name='hprlp',
-    version='0.1.2',
+    version='0.1.3',
     author='HPR-LP Contributors',
     description='Python bindings for the GPU-accelerated Halpern–Peaceman–Rachford linear programming solver',
     long_description=long_description,

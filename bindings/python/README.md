@@ -6,7 +6,7 @@ Python interface for HPR-LP-C (Halpern Peaceman--Rachford Linear Programming) so
 ## Installation
 
 ```bash
-cd HPR-LP-C/bindings/python
+cd bindings/python
 python -m pip install .         # or: python -m pip install -e .
 ```
 
@@ -73,7 +73,7 @@ Create an LP model from matrices and vectors.
 
 ```bash
 cd examples
-python example_mps_file     # Solve from MPS file
+python example_mps_file.py          # Solve from MPS file
 ```
 
 **Quick overview:**
@@ -133,7 +133,7 @@ Solver configuration:
 - `time_limit` - Time limit in seconds (default: 3600)
 - `device_number` - CUDA device ID (default: 0)
 - `check_iter` - Convergence check interval (default: 150)
-- `CUSPARSE_spmv` - Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: False)
+- `CUSPARSE_spmv` - Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning (default: False)
 - `autotune_verbose` - Print backend autotuning diagnostics when fused kernels are enabled (default: False)
 - `use_Ruiz_scaling` - Ruiz scaling (default: True)
 - `use_Pock_Chambolle_scaling` - Pock-Chambolle scaling (default: True)

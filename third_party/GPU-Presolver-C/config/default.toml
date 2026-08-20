@@ -1,0 +1,62 @@
+# Presolve + folding configuration for the C++ PresolveParams API.
+#
+# Command line:
+#   ./cpp/build/gpu_presolver_mps --config config/default.toml model.mps
+#
+# C++:
+#   load_presolve_params_from_toml("config/default.toml", params);
+
+[runtime]
+verbose = false
+debug_checks = false
+trace_enabled = false
+record_postsolve_tape = true
+
+[limits]
+max_presolve_iters = 10
+
+[tolerances]
+feasibility = 1e-6
+bound = 1e-6
+zero = 1e-10
+primal_propagation_min_tighten_abs = 1e-2
+
+[folding]
+enabled = true
+tolerance = 1e-8
+
+[rules]
+close_bounds = true
+empty_rows = true
+singleton_rows = true
+activity_checks = true
+primal_propagation = true
+parallel_rows = true
+empty_cols = true
+singleton_cols_eq = true
+singleton_cols_dual_infer = true
+doubleton_eq = true
+dual_fix = true
+parallel_cols = true
+structural_l1_substitution = true
+
+[structural_l1]
+residual_bound_as_free_min = 1e8
+
+[doubleton]
+single_batch_per_iter = false
+max_fill_in_proxy = 10
+scan = true
+min_selected_per_batch = 256
+min_selected_ratio = 0.005
+max_batch_rounds = 0
+max_time = 0.0
+
+[scheduler]
+mode = "tiered"
+tiered_bootstrap = true
+cleanup_max_rounds = 2
+light_continue_ratio = 0.995
+cycle_stop_ratio = 0.999
+max_light_streak = 3
+global_period = 2

@@ -107,11 +107,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Detect CUDA installation path
 echo "Detecting CUDA installation..."
-CUDA_PATH=""
-if [ -n "$CUDA_HOME" ]; then
-    CUDA_PATH="$CUDA_HOME"
-elif [ -n "$CUDA_PATH" ]; then
-    CUDA_PATH="$CUDA_PATH"
+CUDA_ROOT="${CUDA_HOME:-${CUDA_PATH:-}}"
+if [ -n "$CUDA_ROOT" ]; then
+    CUDA_PATH="$CUDA_ROOT"
 elif [ -d "/usr/local/cuda" ]; then
     CUDA_PATH="/usr/local/cuda"
 elif [ -d "/opt/cuda" ]; then

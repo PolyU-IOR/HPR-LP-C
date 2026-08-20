@@ -5,6 +5,42 @@ import numpy as np
 from typing import Optional, Dict, Any
 
 
+class Timing:
+    """Detailed wall-clock timing for one solve."""
+
+    def __init__(self):
+        self.total_time = 0.0
+        self.presolve_time = 0.0
+        self.setup_time = 0.0
+        self.scaling_time = 0.0
+        self.analyze_time = 0.0
+        self.power_iteration_time = 0.0
+        self.solve_time = 0.0
+
+    @classmethod
+    def from_core(cls, core_timing):
+        timing = cls()
+        timing.total_time = core_timing.total_time
+        timing.presolve_time = core_timing.presolve_time
+        timing.setup_time = core_timing.setup_time
+        timing.scaling_time = core_timing.scaling_time
+        timing.analyze_time = core_timing.analyze_time
+        timing.power_iteration_time = core_timing.power_iteration_time
+        timing.solve_time = core_timing.solve_time
+        return timing
+
+    def to_dict(self):
+        return {
+            "total_time": self.total_time,
+            "presolve_time": self.presolve_time,
+            "setup_time": self.setup_time,
+            "scaling_time": self.scaling_time,
+            "analyze_time": self.analyze_time,
+            "power_iteration_time": self.power_iteration_time,
+            "solve_time": self.solve_time,
+        }
+
+
 class Results:
     """
     Results from the HPRLP solver.
@@ -28,7 +64,7 @@ class Results:
     iter : int
         Total number of iterations
     time : float
-        Total solve time in seconds
+        Main iteration-loop solve time in seconds
     iter4 : int
         Iterations to reach 1e-4 tolerance
     iter6 : int
@@ -60,6 +96,7 @@ class Results:
         self.residuals: float = float('inf')
         self.iter: int = 0
         self.time: float = 0.0
+        self.timing = Timing()
         self.iter4: int = 0
         self.iter6: int = 0
         self.iter8: int = 0
@@ -129,6 +166,7 @@ class Results:
             'residuals': self.residuals,
             'iter': self.iter,
             'time': self.time,
+            'timing': self.timing.to_dict(),
             'iter4': self.iter4,
             'iter6': self.iter6,
             'iter8': self.iter8,
@@ -147,6 +185,7 @@ class Results:
         results.residuals = core_results.residuals
         results.iter = core_results.iter
         results.time = core_results.time
+        results.timing = Timing.from_core(core_results.timing)
         results.iter4 = core_results.iter4
         results.iter6 = core_results.iter6
         results.iter8 = core_results.iter8
@@ -171,6 +210,12 @@ class Results:
         for key, value in d.items():
             if key in ['x', 'y', 'z'] and value is not None:
                 setattr(results, key, np.array(value, dtype=np.float64))
+            elif key == 'timing' and isinstance(value, dict):
+                timing = Timing()
+                for timing_key, timing_value in value.items():
+                    if hasattr(timing, timing_key):
+                        setattr(timing, timing_key, timing_value)
+                results.timing = timing
             elif hasattr(results, key):
                 setattr(results, key, value)
         return results

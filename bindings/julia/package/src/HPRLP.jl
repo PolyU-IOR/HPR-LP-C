@@ -65,8 +65,9 @@ module HPRLP
 using SparseArrays
 using LinearAlgebra
 using JuMP
+using HDF5
 
-export Model, Parameters, Results, BatchedResults, solve, solve_batched, free, is_optimal
+export Model, Parameters, Timing, Results, BatchedResults, solve, solve_batched, free, is_optimal
 
 # Include submodules
 include("wrapper.jl")

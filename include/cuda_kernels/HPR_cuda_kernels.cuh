@@ -1,117 +1,29 @@
 #ifndef HPRLP_CUDA_KERNELS_H
 #define HPRLP_CUDA_KERNELS_H
 
-#include "../structs.h"
-#include <iostream>
-#include <cmath>
+// Compatibility umbrella for solver code that launches kernels from several
 #include <cfloat>
-#include <stdio.h>
+#include <cmath>
+#include <cstdio>
+#include <iostream>
 
+// categories. New code should include the narrow category header it uses.
+#include "shared/vector_kernels.cuh"
+#include "shared/scaling_kernels.cuh"
+#include "shared/residual_kernels.cuh"
+#include "shared/halpern_kernels.cuh"
+
+#include "backends/simple/simple_update_kernels.cuh"
+#include "backends/generic/generic_fused_kernels.cuh"
+#include "backends/unit/unit_kernels.cuh"
+#include "backends/dictionary/dictionary_kernels.cuh"
+#include "backends/structured/structured_kernels.cuh"
+
+#ifndef numThreads
 #define numThreads 256
-// define the numBlocks function
-#define numBlocks(n) (n + numThreads - 1) / numThreads
-
-__global__
-void set_vector_value_device_kernel(HPRLP_FLOAT *x, int n, HPRLP_FLOAT value);
-
-
-__global__ 
-void conceptual_b_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int m);
-
-
-__global__ 
-void axpy_kernel(HPRLP_FLOAT a, const HPRLP_FLOAT* x, const HPRLP_FLOAT* y, HPRLP_FLOAT* z, int len);
-
-
-__global__ 
-void axpby_kernel(HPRLP_FLOAT a, const HPRLP_FLOAT *x, HPRLP_FLOAT b, const HPRLP_FLOAT *y, HPRLP_FLOAT *z, int len);
-
-
-__global__ 
-void vector_dot_product_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int n, bool divide = false);
-
-
-__global__ 
-void CSR_A_row_norm_kernel(int m, int *rowPtr, int *colIndex, HPRLP_FLOAT *value, HPRLP_FLOAT *result, int norm = 1);
-
-
-__global__ 
-void mul_CSR_A_row_kernel(int m, int *rowPtr, int *colIndex, HPRLP_FLOAT *value, HPRLP_FLOAT *x, bool divide = false);
-
-
-__global__ 
-void mul_CSR_AT_row_kernel(int m, int *rowPtr, int *colIndex, HPRLP_FLOAT *value, HPRLP_FLOAT *x, bool divide = false);
-
-
-
-
-
-__global__
-void residual_compute_Rp_kernel(HPRLP_FLOAT *row_norm, HPRLP_FLOAT *Rp, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, int m);
-
-
-__global__
-void residual_compute_lu_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *l, HPRLP_FLOAT *u, int n);
-
-
-__global__
-void residual_compute_Rd_kernel(HPRLP_FLOAT *col_norm, HPRLP_FLOAT *ATy, HPRLP_FLOAT *z, HPRLP_FLOAT *c, HPRLP_FLOAT *Rd, int n);
-
-__global__
-void advance_halpern_factors_kernel(int *halpern_inner, HPRLP_FLOAT *halpern_factors);
-
-
-// X update kernels
-__global__ 
-void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
-                        HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
-                        const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n);
-
-__global__
-void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, HPRLP_FLOAT *ATy,
-                            HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
-                            const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n);
-
-// Y update kernels
-__global__ 
-void update_y_check_kernel(HPRLP_FLOAT *y_temp, HPRLP_FLOAT *y_bar, HPRLP_FLOAT *y, HPRLP_FLOAT *y_obj, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
-                        HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params,
-                        const HPRLP_FLOAT *halpern_factors, int m);
-
-__global__ 
-void update_y_normal_kernel(HPRLP_FLOAT *y, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax,
-                            HPRLP_FLOAT *last_y, const HPRLP_FLOAT *sigma_params,
-                            const HPRLP_FLOAT *halpern_factors, int m);
-
-__global__
-void fused_update_x_z_rows_short_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
-                                        const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
-                                        const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
-                                        const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
-                                        const HPRLP_FLOAT *halpern_factors,
-                                        const int *row_ids, int nrows);
-
-__global__
-void fused_update_x_z_rows_warp_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
-                                       const uint8_t *x_bound_type, const HPRLP_FLOAT *c, const HPRLP_FLOAT *last_x,
-                                       const HPRLP_FLOAT *y, const int *AT_rowPtr, const int *AT_colIndex,
-                                       const HPRLP_FLOAT *AT_value, const HPRLP_FLOAT *sigma_params,
-                                       const HPRLP_FLOAT *halpern_factors,
-                                       const int *row_ids, int nrows);
-
-__global__
-void fused_update_y_rows_short_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
-                                      const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
-                                      const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
-                                      const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
-                                      const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows);
-
-__global__
-void fused_update_y_rows_warp_kernel(HPRLP_FLOAT *y, const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
-                                     const uint8_t *y_bound_type, const HPRLP_FLOAT *last_y,
-                                     const HPRLP_FLOAT *x_hat, const int *A_rowPtr, const int *A_colIndex,
-                                     const HPRLP_FLOAT *A_value, const HPRLP_FLOAT *sigma_params,
-                                     const HPRLP_FLOAT *halpern_factors, const int *row_ids, int nrows);
-
+#endif
+#ifndef numBlocks
+#define numBlocks(n) (((n) + numThreads - 1) / numThreads)
+#endif
 
 #endif

@@ -50,13 +50,15 @@ int main(int argc, char** argv) {
     
     // Step 1: Load model from MPS file
     std::cout << "Loading model from MPS file...\n";
-    LP_info_cpu* model = create_model_from_mps(mps_file);
+    HPRLP_FLOAT read_time = 0.0;
+    LP_info_cpu* model = create_model_from_mps(mps_file, &read_time);
     
     if (model == nullptr) {
         std::cerr << "Error: Failed to load model from MPS file\n";
         return 1;
     }
     
+    std::cout << "Read/build time: " << read_time << " seconds\n";
     std::cout << "Model loaded: " << model->m << " constraints, " 
               << model->n << " variables\n";
     std::cout << "Objective constant: " << std::fixed << std::setprecision(6) 

@@ -142,7 +142,7 @@ Solver configuration options (specified as keyword arguments):
 | `time_limit` | Time limit in seconds | `3600` |
 | `device_number` | CUDA device ID | `0` |
 | `check_iter` | Convergence check interval | `150` |
-| `CUSPARSE_spmv` | Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning | `false` |
+| `CUSPARSE_spmv` | Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning | `false` |
 | `autotune_verbose` | Print backend autotuning diagnostics when fused kernels are enabled | `false` |
 | `use_Ruiz_scaling` | Apply Ruiz scaling | `true` |
 | `use_Pock_Chambolle_scaling` | Apply Pock–Chambolle scaling | `true` |

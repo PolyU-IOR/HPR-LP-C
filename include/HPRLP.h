@@ -9,16 +9,16 @@
  * using GPU acceleration with the Halpern-Peaceman-Rachford splitting method.
  * 
  * @author HPRLP Contributors
- * @version 0.1.2
+ * @version 0.1.3
  */
 
-#include "structs.h"        // Data structures for LP problems
-#include "scaling.h"        // Matrix/vector scaling algorithms
-#include "power_iteration.h"  // Eigenvalue computation
-#include "main_iterate.h"   // Core HPR algorithm
-#include "utils.h"          // Utility functions
-#include "preprocess.h"     // Memory allocation and preprocessing
-#include "batched_solver.h" // Batched shared-A GPU solver
+#include "api/structs.h"        // Data structures for LP problems
+#include "solver/scaling.h"        // Matrix/vector scaling algorithms
+#include "solver/power_iteration.h"  // Eigenvalue computation
+#include "solver/iteration/main_iterate.h"   // Core HPR algorithm
+#include "support/utils.h"          // Utility functions
+#include "gpu/preprocessing/preprocess.h"     // Memory allocation and preprocessing
+#include "batch/batched_solver.h" // Batched shared-A GPU solver
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,7 +41,7 @@ extern "C" {
 HPRLP_results HPRLP_main_solve(const LP_info_cpu *lp_info_cpu, const HPRLP_parameters *param);
 
 /* ============================================================================
- * New Model-Based API (v0.2+)
+ * Model-Based API
  * ============================================================================
  * This is the recommended API for language bindings and advanced users.
  * It separates model construction from solving, providing better control
@@ -111,12 +111,29 @@ LP_info_cpu* create_model_from_arrays(int m, int n, int nnz,
                                       bool is_csc = false);
 
 /**
+ * @brief Create an LP model from raw arrays, including an objective constant.
+ *
+ * This is equivalent to create_model_from_arrays(), but preserves the constant
+ * term used by cached HDF5 models and language bindings.
+ */
+LP_info_cpu* create_model_from_arrays_with_obj_constant(
+    int m, int n, int nnz,
+    const int *rowPtr, const int *colIndex,
+    const HPRLP_FLOAT *values,
+    const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+    const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+    const HPRLP_FLOAT *c, HPRLP_FLOAT obj_constant,
+    bool is_csc = false);
+
+/**
  * @brief Create an LP model from an MPS file
  * 
  * Reads and parses an MPS format file, constructing an LP_info_cpu model.
  * This function handles all file I/O and preprocessing.
  * 
  * @param mps_file_path Path to the MPS format file (null-terminated string)
+ * @param read_time_out Optional output for elapsed model-reading/building wall
+ *                      time in seconds
  * @return Pointer to LP_info_cpu model, or NULL on error
  * 
  * @note The returned model must be freed using free_model()
@@ -125,7 +142,8 @@ LP_info_cpu* create_model_from_arrays(int m, int n, int nnz,
  * 
  * @code{.cpp}
  * // Example: Create model from MPS file
- * LP_info_cpu* model = create_model_from_mps("problem.mps");
+ * HPRLP_FLOAT read_time = 0.0;
+ * LP_info_cpu* model = create_model_from_mps("problem.mps", &read_time);
  * if (model) {
  *     printf("Loaded model: %d constraints, %d variables\n", 
  *            model->m, model->n);
@@ -137,7 +155,8 @@ LP_info_cpu* create_model_from_arrays(int m, int n, int nnz,
  * 
  * @see solve(), free_model()
  */
-LP_info_cpu* create_model_from_mps(const char* mps_file_path);
+LP_info_cpu* create_model_from_mps(const char* mps_file_path,
+                                   HPRLP_FLOAT* read_time_out = nullptr);
 
 /**
  * @brief Solve an LP model with given parameters

@@ -6,9 +6,9 @@ HPRLP_LIB_DIR := $(HPRLP_ROOT)/lib
 HPRLP_INCLUDE_DIR := $(HPRLP_ROOT)/include
 
 # Auto-detect CUDA
-CUDA_PATH ?= $(shell if [ -d /usr/local/cuda ]; then echo /usr/local/cuda; \
+CUDA_PATH ?= $(shell if [ -n "$${CUDA_HOME}" ] && [ -x "$${CUDA_HOME}/bin/nvcc" ]; then echo "$${CUDA_HOME}"; \
+                      elif [ -d /usr/local/cuda ]; then echo /usr/local/cuda; \
                       elif [ -d /opt/cuda ]; then echo /opt/cuda; \
-                      elif [ -n "$${CUDA_HOME}" ]; then echo $${CUDA_HOME}; \
                       elif command -v nvcc >/dev/null 2>&1; then dirname $$(dirname $$(command -v nvcc)); \
                       else echo /usr/local/cuda; fi)
 

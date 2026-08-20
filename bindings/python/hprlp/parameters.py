@@ -19,7 +19,7 @@ class Parameters:
     check_iter : int
         Number of iterations between convergence checks (default: 150)
     CUSPARSE_spmv : bool
-        Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: False)
+        Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning (default: False)
     autotune_verbose : bool
         Print backend autotuning diagnostics when fused kernels are enabled (default: False)
     use_Ruiz_scaling : bool
@@ -30,6 +30,10 @@ class Parameters:
         Enable bound constraint scaling (default: True)
     use_presolve : bool
         Enable embedded PSLP presolve/postsolve (default: True)
+    use_reduced_matrix : bool
+        Enable reduced-column iterations when automatic policy is disabled (default: False)
+    auto_reduced_compression_policy : bool
+        Select reduced/compression modes from presolved dimensions (default: True)
     
     Examples
     --------
@@ -51,6 +55,10 @@ class Parameters:
         self.use_Pock_Chambolle_scaling = True
         self.use_bc_scaling = True
         self.use_presolve = True
+        self.use_reduced_matrix = False
+        self.auto_reduced_compression_policy = True
+        self.print_debug_info = False
+        self.specified_parameter_mask = 0
     
     def __repr__(self):
         return (f"Parameters(max_iter={self.max_iter}, "
@@ -76,6 +84,11 @@ class Parameters:
             param.use_Pock_Chambolle_scaling = self.use_Pock_Chambolle_scaling
             param.use_bc_scaling = self.use_bc_scaling
             param.use_presolve = self.use_presolve
+            param.use_reduced_matrix = self.use_reduced_matrix
+            param.auto_reduced_compression_policy = (
+                self.auto_reduced_compression_policy)
+            param.print_debug_info = self.print_debug_info
+            param.specified_parameter_mask = self.specified_parameter_mask
             return param
         except ImportError:
             return self
@@ -103,4 +116,9 @@ class Parameters:
             'use_Pock_Chambolle_scaling': self.use_Pock_Chambolle_scaling,
             'use_bc_scaling': self.use_bc_scaling,
             'use_presolve': self.use_presolve,
+            'use_reduced_matrix': self.use_reduced_matrix,
+            'auto_reduced_compression_policy': (
+                self.auto_reduced_compression_policy),
+            'print_debug_info': self.print_debug_info,
+            'specified_parameter_mask': self.specified_parameter_mask,
         }

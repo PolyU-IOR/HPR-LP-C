@@ -1,4 +1,4 @@
-# Contributing to HPR-LP
+# Contributing to HPR-LP-C
 
 Thank you for your interest in contributing to HPR-LP! This document provides guidelines for contributing to the project.
 
@@ -7,7 +7,7 @@ Thank you for your interest in contributing to HPR-LP! This document provides gu
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/HPR-LP-C.git
+   git clone https://github.com/<your-account>/HPR-LP-C.git
    cd HPR-LP-C
    ```
 3. **Create a branch** for your feature or bugfix:
@@ -18,9 +18,9 @@ Thank you for your interest in contributing to HPR-LP! This document provides gu
 ## Development Setup
 
 ### Prerequisites
-- NVIDIA GPU with CUDA support (Compute Capability 5.2+)
-- CUDA Toolkit 12.4+
-- GCC 9-12 (for compatibility)
+- NVIDIA Turing-or-newer GPU (Compute Capability 7.5+)
+- CUDA Toolkit 13.3+
+- GCC 9-12 with C++17 support
 - Python 3.8+ (for Python bindings)
 - Julia 1.6+ (for Julia bindings)
 - MATLAB R2020a+ (for MATLAB bindings)
@@ -31,15 +31,15 @@ make clean
 make -j
 ```
 
-### Running Tests
+### Quick verification
 ```bash
-# Test the solver
+# Run the command-line solver
 ./build/solve_mps_file -i data/model.mps
 
-# Test C/C++ examples
+# Run a C++ example
 cd examples/cpp && make && ./example_direct_lp
 
-# Test Python bindings
+# Build and run the Python example
 cd bindings/python && python -m pip install .
 python examples/example_direct_lp.py
 ```
@@ -62,7 +62,7 @@ python examples/example_direct_lp.py
 
 ### Pull Requests
 1. Ensure your code follows the existing style
-2. Add tests if applicable
+2. Include a minimal reproduction command or example when applicable
 3. Update documentation as needed
 4. Commit with clear, descriptive messages:
    ```
@@ -118,7 +118,7 @@ Feel free to:
 
 ## License
 
-By contributing to HPR-LP, you agree that your contributions will be licensed under the MIT License.
+By contributing to HPR-LP-C, you agree that your contributions will be licensed under the MIT License.
 
 ---
 

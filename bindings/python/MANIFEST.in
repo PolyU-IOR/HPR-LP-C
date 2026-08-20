@@ -16,7 +16,7 @@ include ../../CONTRIBUTING.md
 # Include Python package files
 recursive-include hprlp *.py
 
-# Exclude build artifacts and tests
+# Exclude build artifacts
 global-exclude *.pyc
 global-exclude __pycache__
 global-exclude *.o

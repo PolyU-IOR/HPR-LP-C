@@ -18,13 +18,15 @@ int main() {
     printf("MPS file: %s\n\n", mps_path);
     
     printf("Loading model from MPS file...\n");
-    LP_info_cpu* model = create_model_from_mps(mps_path);
+    HPRLP_FLOAT read_time = 0.0;
+    LP_info_cpu* model = create_model_from_mps(mps_path, &read_time);
     
     if (!model) {
         fprintf(stderr, "Failed to load model from MPS file\n");
         return 1;
     }
     
+    printf("Read/build time: %.4f seconds\n", read_time);
     printf("Model loaded: %d constraints, %d variables\n", model->m, model->n);
     printf("Objective constant: %.6f\n\n", model->obj_constant);
     

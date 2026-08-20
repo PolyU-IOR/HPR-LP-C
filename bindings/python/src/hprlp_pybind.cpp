@@ -10,14 +10,15 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <cstdlib>
+#include <cstdint>
 #include <vector>
 #include <cmath>
 #include <limits>
 
 // Include HPRLP headers (now using proper include paths from CMake)
 #include "HPRLP.h"
-#include "structs.h"
-#include "mps_reader.h"
+#include "api/structs.h"
+#include "io/mps_reader.h"
 
 namespace py = pybind11;
 
@@ -38,6 +39,10 @@ public:
     bool use_Pock_Chambolle_scaling;
     bool use_bc_scaling;
     bool use_presolve;
+    bool use_reduced_matrix;
+    bool auto_reduced_compression_policy;
+    bool print_debug_info;
+    std::uint64_t specified_parameter_mask;
 
     PyParameter() 
         : max_iter(INT32_MAX),
@@ -51,7 +56,11 @@ public:
           use_Ruiz_scaling(true),
           use_Pock_Chambolle_scaling(true),
           use_bc_scaling(true),
-          use_presolve(true) {}
+          use_presolve(true),
+          use_reduced_matrix(false),
+          auto_reduced_compression_policy(true),
+          print_debug_info(false),
+          specified_parameter_mask(0) {}
 
     // Convert to C Parameter struct
     HPRLP_parameters to_c_struct() const {
@@ -68,6 +77,11 @@ public:
         param.use_Pock_Chambolle_scaling = use_Pock_Chambolle_scaling;
         param.use_bc_scaling = use_bc_scaling;
         param.use_presolve = use_presolve;
+        param.use_reduced_matrix = use_reduced_matrix;
+        param.auto_reduced_compression_policy =
+            auto_reduced_compression_policy;
+        param.print_debug_info = print_debug_info;
+        param.specified_parameter_mask = specified_parameter_mask;
         return param;
     }
 };
@@ -75,6 +89,41 @@ public:
 /**
  * @brief Python wrapper class for HPRLP Results
  */
+class PyTime {
+public:
+    double total_time = 0.0;
+    double presolve_time = 0.0;
+    double setup_time = 0.0;
+    double scaling_time = 0.0;
+    double analyze_time = 0.0;
+    double power_iteration_time = 0.0;
+    double solve_time = 0.0;
+
+    static PyTime from_c_struct(const HPRLP_time& timing) {
+        PyTime result;
+        result.total_time = timing.total_time;
+        result.presolve_time = timing.presolve_time;
+        result.setup_time = timing.setup_time;
+        result.scaling_time = timing.scaling_time;
+        result.analyze_time = timing.analyze_time;
+        result.power_iteration_time = timing.power_iteration_time;
+        result.solve_time = timing.solve_time;
+        return result;
+    }
+
+    py::dict to_dict() const {
+        py::dict d;
+        d["total_time"] = total_time;
+        d["presolve_time"] = presolve_time;
+        d["setup_time"] = setup_time;
+        d["scaling_time"] = scaling_time;
+        d["analyze_time"] = analyze_time;
+        d["power_iteration_time"] = power_iteration_time;
+        d["solve_time"] = solve_time;
+        return d;
+    }
+};
+
 class PyResults {
 public:
     double residuals;
@@ -84,6 +133,7 @@ public:
     double time6;
     double time8;
     double time;
+    PyTime timing;
     int iter4;
     int iter6;
     int iter8;
@@ -109,6 +159,7 @@ public:
         py_result.time6 = result.time6;
         py_result.time8 = result.time8;
         py_result.time = result.time;
+        py_result.timing = PyTime::from_c_struct(result.timing);
         py_result.iter4 = result.iter4;
         py_result.iter6 = result.iter6;
         py_result.iter8 = result.iter8;
@@ -138,6 +189,7 @@ public:
         d["time6"] = time6;
         d["time8"] = time8;
         d["time"] = time;
+        d["timing"] = timing.to_dict();
         d["iter4"] = iter4;
         d["iter6"] = iter6;
         d["iter8"] = iter8;
@@ -226,8 +278,9 @@ public:
 class PyModel {
 public:
     LP_info_cpu* model_ptr;
+    double read_time;
     
-    PyModel() : model_ptr(nullptr) {}
+    PyModel() : model_ptr(nullptr), read_time(0.0) {}
     
     ~PyModel() {
         // Destructor will be called by Python's garbage collector
@@ -248,6 +301,10 @@ public:
     
     double get_obj_constant() const {
         return model_ptr ? model_ptr->obj_constant : 0.0;
+    }
+
+    double get_read_time() const {
+        return read_time;
     }
 };
 
@@ -330,7 +387,7 @@ PyModel py_create_model_from_mps(const std::string& filename) {
     PyModel py_model;
     
     // Create model using C API
-    py_model.model_ptr = create_model_from_mps(filename.c_str());
+    py_model.model_ptr = create_model_from_mps(filename.c_str(), &py_model.read_time);
     
     if (py_model.model_ptr == nullptr) {
         throw std::runtime_error("Failed to create model from MPS file: " + filename);
@@ -484,7 +541,7 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readwrite("check_iter", &PyParameter::check_iter,
                       "Iterations between convergence checks (default: 150)")
         .def_readwrite("CUSPARSE_spmv", &PyParameter::CUSPARSE_spmv,
-                  "Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning")
+                  "Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning")
         .def_readwrite("autotune_verbose", &PyParameter::autotune_verbose,
                   "Print backend autotuning diagnostics when fused kernels are enabled")
         .def_readwrite("use_CR_scaling", &PyParameter::use_CR_scaling,
@@ -497,10 +554,30 @@ PYBIND11_MODULE(_hprlp_core, m) {
                       "Use bound constraint scaling (default: True)")
         .def_readwrite("use_presolve", &PyParameter::use_presolve,
                       "Enable embedded PSLP presolve/postsolve (default: True)")
+        .def_readwrite("use_reduced_matrix", &PyParameter::use_reduced_matrix,
+                      "Enable reduced-column iterations in manual mode (default: False)")
+        .def_readwrite("auto_reduced_compression_policy",
+                      &PyParameter::auto_reduced_compression_policy,
+                      "Select reduced/compression modes from presolved dimensions (default: True)")
+        .def_readwrite("print_debug_info", &PyParameter::print_debug_info,
+                      "Print detailed solver diagnostics (default: False)")
+        .def_readwrite("specified_parameter_mask", &PyParameter::specified_parameter_mask,
+                      "Bit mask of explicitly supplied parameters for concise logs")
         .def("__repr__", [](const PyParameter &p) {
             return "<HPRLP.Parameters max_iter=" + std::to_string(p.max_iter) +
                    " stop_tol=" + std::to_string(p.stop_tol) + ">";
         });
+
+    py::class_<PyTime>(m, "Time", "Single-solve timing breakdown")
+        .def(py::init<>())
+        .def_readonly("total_time", &PyTime::total_time)
+        .def_readonly("presolve_time", &PyTime::presolve_time)
+        .def_readonly("setup_time", &PyTime::setup_time)
+        .def_readonly("scaling_time", &PyTime::scaling_time)
+        .def_readonly("analyze_time", &PyTime::analyze_time)
+        .def_readonly("power_iteration_time", &PyTime::power_iteration_time)
+        .def_readonly("solve_time", &PyTime::solve_time)
+        .def("to_dict", &PyTime::to_dict);
 
     // Results class
     py::class_<PyResults>(m, "Results", "Results from HPRLP solver")
@@ -511,7 +588,8 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readonly("time4", &PyResults::time4, "Time to reach 1e-4 tolerance")
         .def_readonly("time6", &PyResults::time6, "Time to reach 1e-6 tolerance")
         .def_readonly("time8", &PyResults::time8, "Time to reach 1e-8 tolerance")
-        .def_readonly("time", &PyResults::time, "Total solve time")
+        .def_readonly("time", &PyResults::time, "Main iteration-loop solve time")
+        .def_readonly("timing", &PyResults::timing, "Detailed solve timing")
         .def_readonly("iter4", &PyResults::iter4, "Iterations to reach 1e-4")
         .def_readonly("iter6", &PyResults::iter6, "Iterations to reach 1e-6")
         .def_readonly("iter8", &PyResults::iter8, "Iterations to reach 1e-8")
@@ -553,6 +631,7 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_property_readonly("m", &PyModel::get_m, "Number of constraints")
         .def_property_readonly("n", &PyModel::get_n, "Number of variables")
         .def_property_readonly("obj_constant", &PyModel::get_obj_constant, "Objective constant term")
+        .def_property_readonly("read_time", &PyModel::get_read_time, "MPS model read/build time")
         .def("__repr__", [](const PyModel &model) -> std::string {
             if (model.is_valid()) {
                 return "<HPRLP.Model m=" + std::to_string(model.get_m()) +
@@ -680,6 +759,6 @@ PYBIND11_MODULE(_hprlp_core, m) {
         )pbdoc");
 
     // Constants
-    m.attr("__version__") = "0.1.2";
+    m.attr("__version__") = "0.1.3";
     m.attr("INFINITY") = std::numeric_limits<double>::infinity();
 }

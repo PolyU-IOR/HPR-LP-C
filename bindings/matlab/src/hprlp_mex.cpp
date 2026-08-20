@@ -9,8 +9,8 @@
 #include "mex.h"
 #include "matrix.h"
 #include "HPRLP.h"
-#include "mps_reader.h"
-#include "preprocess.h"
+#include "io/mps_reader.h"
+#include "gpu/preprocessing/preprocess.h"
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -242,7 +242,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         std::string filename = getString(prhs[1], "filename");
         
         // Call C library function
-        LP_info_cpu* model = create_model_from_mps(filename.c_str());
+        HPRLP_FLOAT read_time = 0.0;
+        LP_info_cpu* model = create_model_from_mps(filename.c_str(), &read_time);
         
         if (model == NULL) {
             mexErrMsgIdAndTxt("HPRLP:RuntimeError", 
@@ -253,6 +254,9 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         plhs[0] = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
         uint64_t* ptr = static_cast<uint64_t*>(mxGetData(plhs[0]));
         *ptr = reinterpret_cast<uint64_t>(model);
+        if (nlhs > 1) {
+            plhs[1] = mxCreateDoubleScalar(read_time);
+        }
         
         return;
     }
@@ -308,6 +312,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             if ((field = mxGetField(param_struct, 0, "autotune_verbose")) != NULL) {
                 param->autotune_verbose = getScalarBool(field, "autotune_verbose");
             }
+            if ((field = mxGetField(param_struct, 0, "use_reduced_matrix")) != NULL) {
+                param->use_reduced_matrix = getScalarBool(field, "use_reduced_matrix");
+            }
+            if ((field = mxGetField(param_struct, 0, "auto_reduced_compression_policy")) != NULL) {
+                param->auto_reduced_compression_policy =
+                    getScalarBool(field, "auto_reduced_compression_policy");
+            }
             if ((field = mxGetField(param_struct, 0, "use_CR_scaling")) != NULL) {
                 param->use_CR_scaling = getScalarBool(field, "use_CR_scaling");
             }
@@ -332,8 +343,8 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         const char* field_names[] = {"status", "residuals", "primal_obj", "gap",
                                     "time4", "time6", "time8", "time",
                                     "iter4", "iter6", "iter8", "iter",
-                        "x", "y", "z"};
-        plhs[0] = mxCreateStructMatrix(1, 1, 15, field_names);
+                        "x", "y", "z", "timing"};
+        plhs[0] = mxCreateStructMatrix(1, 1, 16, field_names);
         
         // Set status
         mxSetField(plhs[0], 0, "status", mxCreateString(result.status));
@@ -346,6 +357,18 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         mxSetField(plhs[0], 0, "time6", mxCreateDoubleScalar(result.time6));
         mxSetField(plhs[0], 0, "time8", mxCreateDoubleScalar(result.time8));
         mxSetField(plhs[0], 0, "time", mxCreateDoubleScalar(result.time));
+        const char* timing_fields[] = {"total_time", "presolve_time", "setup_time",
+                                       "scaling_time", "analyze_time",
+                                       "power_iteration_time", "solve_time"};
+        mxArray* timing = mxCreateStructMatrix(1, 1, 7, timing_fields);
+        mxSetField(timing, 0, "total_time", mxCreateDoubleScalar(result.timing.total_time));
+        mxSetField(timing, 0, "presolve_time", mxCreateDoubleScalar(result.timing.presolve_time));
+        mxSetField(timing, 0, "setup_time", mxCreateDoubleScalar(result.timing.setup_time));
+        mxSetField(timing, 0, "scaling_time", mxCreateDoubleScalar(result.timing.scaling_time));
+        mxSetField(timing, 0, "analyze_time", mxCreateDoubleScalar(result.timing.analyze_time));
+        mxSetField(timing, 0, "power_iteration_time", mxCreateDoubleScalar(result.timing.power_iteration_time));
+        mxSetField(timing, 0, "solve_time", mxCreateDoubleScalar(result.timing.solve_time));
+        mxSetField(plhs[0], 0, "timing", timing);
         mxSetField(plhs[0], 0, "iter4", mxCreateDoubleScalar(result.iter4));
         mxSetField(plhs[0], 0, "iter6", mxCreateDoubleScalar(result.iter6));
         mxSetField(plhs[0], 0, "iter8", mxCreateDoubleScalar(result.iter8));
@@ -481,6 +504,13 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             }
             if ((field = mxGetField(param_struct, 0, "autotune_verbose")) != NULL) {
                 param->autotune_verbose = getScalarBool(field, "autotune_verbose");
+            }
+            if ((field = mxGetField(param_struct, 0, "use_reduced_matrix")) != NULL) {
+                param->use_reduced_matrix = getScalarBool(field, "use_reduced_matrix");
+            }
+            if ((field = mxGetField(param_struct, 0, "auto_reduced_compression_policy")) != NULL) {
+                param->auto_reduced_compression_policy =
+                    getScalarBool(field, "auto_reduced_compression_policy");
             }
             if ((field = mxGetField(param_struct, 0, "use_CR_scaling")) != NULL) {
                 param->use_CR_scaling = getScalarBool(field, "use_CR_scaling");

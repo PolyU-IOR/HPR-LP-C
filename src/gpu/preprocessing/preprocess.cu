@@ -1,0 +1,56 @@
+#include "gpu/preprocessing/preprocess.h"
+#include "gpu/preprocessing/operators/structured/affine_block_operator.h"
+#include "gpu/memory/compressible_memory.h"
+#include "gpu/preprocessing/operators/dictionary/dictionary_operator_policy.h"
+#include "solver/graph/graph_batch_policy.h"
+#include "gpu/preprocessing/operators/structured/grid_slack_laplacian_operator.h"
+#include "gpu/preprocessing/operators/dictionary/packed_dictionary_operator.h"
+#include "gpu/preprocessing/operators/structured/row_template_operator.h"
+#include "gpu/preprocessing/policies/row_bucket_policy.h"
+#include "gpu/preprocessing/operators/unit/signed_unit_operator_policy.h"
+#include "gpu/preprocessing/operators/common/structured_operator_encoding.h"
+#include "gpu/preprocessing/operators/unit/unit_coltile_policy.h"
+#include "gpu/preprocessing/operators/unit/unit_operator_policy.h"
+#include "gpu/preprocessing/operators/structured/windowed_stencil_operator.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <stdexcept>
+#include <tuple>
+#include <utility>
+
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+#include <thrust/binary_search.h>
+#include <thrust/copy.h>
+#include <thrust/count.h>
+#include <thrust/execution_policy.h>
+#include <thrust/extrema.h>
+#include <thrust/fill.h>
+#include <thrust/functional.h>
+#include <thrust/gather.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/constant_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/remove.h>
+#include <thrust/reduce.h>
+#include <thrust/scan.h>
+#include <thrust/sequence.h>
+#include <thrust/sort.h>
+#include <thrust/system/cuda/execution_policy.h>
+#include <thrust/transform.h>
+#include <thrust/tuple.h>
+
+
+#include "detail/model_transfer.inc.cu"
+#include "detail/device_transpose.inc.cu"
+#include "detail/device_dictionary.inc.cu"
+#include "detail/device_operator_metadata.inc.cu"
+#include "detail/spmv_analysis.inc.cu"
+#include "detail/workspace_memory.inc.cu"
+#include "detail/operator_preparation.inc.cu"
+#include "detail/cleanup.inc.cu"

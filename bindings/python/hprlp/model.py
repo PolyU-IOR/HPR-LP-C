@@ -89,6 +89,13 @@ class Model:
             raise RuntimeError("Model has been freed")
         return self._core_model.obj_constant
     
+    @property
+    def read_time(self) -> float:
+        """MPS model read/build time in seconds (zero for array models)."""
+        if self._freed:
+            raise RuntimeError("Model has been freed")
+        return self._core_model.read_time
+
     def is_valid(self) -> bool:
         """Check if model is valid (not freed)"""
         return not self._freed and self._core_model.is_valid()

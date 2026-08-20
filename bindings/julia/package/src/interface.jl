@@ -47,9 +47,11 @@ mutable struct Model
     m::Int
     n::Int
     obj_constant::Float64
+    read_time::Float64
     
-    function Model(ptr::Ptr{Cvoid}, m::Int, n::Int, obj_constant::Float64 = 0.0)
-        model = new(ptr, m, n, obj_constant)
+    function Model(ptr::Ptr{Cvoid}, m::Int, n::Int, obj_constant::Float64 = 0.0,
+                   read_time::Float64 = 0.0)
+        model = new(ptr, m, n, obj_constant, read_time)
         # Register finalizer to automatically free memory
         finalizer(free, model)
         return model
@@ -140,11 +142,16 @@ Create an LP model from an MPS file.
 function Model(filename::String)
     # Check file exists
     if !isfile(filename)
-        error("MPS file not found: $filename")
+        error("LP file not found: $filename")
     end
-    
+
+    lower = lowercase(filename)
+    if endswith(lower, ".h5") || endswith(lower, ".hdf5")
+        return model_from_hdf5(filename)
+    end
+
     # Call C function to create model
-    ptr = c_create_model_from_mps(filename)
+    ptr, read_time = c_create_model_from_mps(filename)
     
     if ptr == C_NULL
         error("Failed to create model from MPS file: $filename")
@@ -153,7 +160,49 @@ function Model(filename::String)
     # Parse MPS file to get dimensions
     m, n = get_mps_dimensions(filename)
     
-    return Model(ptr, m, n, 0.0)
+    return Model(ptr, m, n, 0.0, read_time)
+end
+
+function model_from_hdf5(filename::String)
+    read_start = time()
+    data = h5open(filename, "r") do file
+        version = Int32(read(file, "schema_version"))
+        version == 1 ||
+            error("Unsupported LP HDF5 schema version $version in $filename")
+        matrix_size = Vector{Int64}(read(file, "A/size"))
+        length(matrix_size) == 2 || error("Invalid A/size dataset in $filename")
+        m, n = Int.(matrix_size)
+        colptr = Vector{Int32}(read(file, "A/colptr"))
+        rowval = Vector{Int32}(read(file, "A/rowval"))
+        nzval = Vector{Float64}(read(file, "A/nzval"))
+        c = Vector{Float64}(read(file, "c"))
+        AL = Vector{Float64}(read(file, "AL"))
+        AU = Vector{Float64}(read(file, "AU"))
+        l = Vector{Float64}(read(file, "l"))
+        u = Vector{Float64}(read(file, "u"))
+        obj_constant = Float64(read(file, "obj_constant"))
+        return m, n, colptr, rowval, nzval, c, AL, AU, l, u, obj_constant
+    end
+    m, n, colptr, rowval, nzval, c, AL, AU, l, u, obj_constant = data
+    length(colptr) == n + 1 || error("Invalid A/colptr length in $filename")
+    length(rowval) == length(nzval) || error("Invalid sparse arrays in $filename")
+    length(c) == n || error("Invalid c length in $filename")
+    length(l) == n || error("Invalid l length in $filename")
+    length(u) == n || error("Invalid u length in $filename")
+    length(AL) == m || error("Invalid AL length in $filename")
+    length(AU) == m || error("Invalid AU length in $filename")
+    first(colptr) == 1 || error("A/colptr must use Julia 1-based indexing")
+    last(colptr) == length(nzval) + 1 || error("Invalid final A/colptr")
+    all(index -> 1 <= index <= m, rowval) ||
+        error("A/rowval contains an out-of-range row index")
+    colptr .-= 1
+    rowval .-= 1
+    ptr = c_create_model_from_arrays_with_obj_constant(
+        m, n, length(nzval), colptr, rowval, nzval,
+        AL, AU, l, u, c, obj_constant, true,
+    )
+    ptr == C_NULL && error("Failed to create model from HDF5 file: $filename")
+    return Model(ptr, m, n, 0.0, time() - read_start)
 end
 
 """
@@ -188,7 +237,7 @@ function solve(model::Model, params = nothing)
         result.primal_obj + model.obj_constant,
         result.gap, result.residuals, result.iter, result.time,
         result.iter4, result.iter6, result.iter8,
-        result.time4, result.time6, result.time8
+        result.time4, result.time6, result.time8, result.timing
     )
     
     return result
@@ -220,7 +269,7 @@ Solver configuration parameters.
 - `time_limit::Float64`: Time limit in seconds (default: 3600.0)
 - `device_number::Int`: CUDA device ID (default: 0)
 - `check_iter::Int`: Iterations between convergence checks (default: 150)
-- `CUSPARSE_spmv::Bool`: Force the cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: false)
+- `CUSPARSE_spmv::Bool`: Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning (default: false)
 - `autotune_verbose::Bool`: Print backend autotuning diagnostics when fused kernels are enabled (default: false)
 - `use_CR_scaling::Bool`: Enable Curtis-Reid prescaling before the other scaling passes (default: false)
 - `use_Ruiz_scaling::Bool`: Enable Ruiz equilibration scaling (default: true)
@@ -247,12 +296,26 @@ mutable struct Parameters
     check_iter::Int
     CUSPARSE_spmv::Bool
     autotune_verbose::Bool
+    enable_progress_monitor::Bool
+    enable_progress_control::Bool
+    enable_sigma_rebalance_restart::Bool
+    use_progress_restart_guard::Bool
+    restart_cooldown_checks::Int
+    debug_restart::Bool
+    debug_sigma::Bool
+    fixed_sigma::Float64
     use_CR_scaling::Bool
     use_Ruiz_scaling::Bool
     use_Pock_Chambolle_scaling::Bool
     use_bc_scaling::Bool
     use_presolve::Bool
-    
+    enable_gpu_folding::Bool
+    presolver::Symbol
+    use_reduced_matrix::Bool
+    auto_reduced_compression_policy::Bool
+    print_debug_info::Bool
+    specified_parameter_mask::UInt64
+
     function Parameters(;
         max_iter::Int = Int(typemax(Int32)),
         stop_tol::Float64 = 1e-4,
@@ -261,15 +324,37 @@ mutable struct Parameters
         check_iter::Int = 150,
         CUSPARSE_spmv::Bool = false,
         autotune_verbose::Bool = false,
-        use_CR_scaling::Bool = false,
+        enable_progress_monitor::Bool = true,
+        enable_progress_control::Bool = true,
+        enable_sigma_rebalance_restart::Bool = true,
+        use_progress_restart_guard::Bool = false,
+        restart_cooldown_checks::Int = 0,
+        debug_restart::Bool = false,
+        debug_sigma::Bool = false,
+        fixed_sigma::Float64 = NaN,
+        use_CR_scaling::Bool = true,
         use_Ruiz_scaling::Bool = true,
         use_Pock_Chambolle_scaling::Bool = true,
         use_bc_scaling::Bool = true,
-        use_presolve::Bool = true)
-        
+        use_presolve::Bool = true,
+        enable_gpu_folding::Bool = true,
+        presolver::Symbol = :gpu,
+        use_reduced_matrix::Bool = false,
+        auto_reduced_compression_policy::Bool = true,
+        print_debug_info::Bool = false,
+        specified_parameter_mask::UInt64 = UInt64(0))
+
+        presolver in (:pslp, :gpu, :none) ||
+            throw(ArgumentError("presolver must be :pslp, :gpu, or :none"))
         new(Int(max_iter), stop_tol, time_limit, Int(device_number), Int(check_iter),
             CUSPARSE_spmv, autotune_verbose,
-            use_CR_scaling, use_Ruiz_scaling, use_Pock_Chambolle_scaling, use_bc_scaling, use_presolve)
+            enable_progress_monitor, enable_progress_control,
+            enable_sigma_rebalance_restart, use_progress_restart_guard,
+            Int(restart_cooldown_checks), debug_restart, debug_sigma, fixed_sigma,
+            use_CR_scaling, use_Ruiz_scaling, use_Pock_Chambolle_scaling,
+            use_bc_scaling, use_presolve, enable_gpu_folding, presolver,
+            use_reduced_matrix, auto_reduced_compression_policy,
+            print_debug_info, specified_parameter_mask)
     end
 end
 
@@ -277,21 +362,25 @@ end
 Convert Julia Parameters to C struct
 """
 function to_c_struct(params::Parameters)
-    c_params = C_HPRLP_parameters()
-    c_params.max_iter = Int32(params.max_iter)
-    c_params.stop_tol = params.stop_tol
-    c_params.time_limit = params.time_limit
-    c_params.device_number = Int32(params.device_number)
-    c_params.check_iter = Int32(params.check_iter)
-    c_params.CUSPARSE_spmv = params.CUSPARSE_spmv
-    c_params.autotune_verbose = params.autotune_verbose
-    c_params.use_CR_scaling = params.use_CR_scaling
-    c_params.use_Ruiz_scaling = params.use_Ruiz_scaling
-    c_params.use_Pock_Chambolle_scaling = params.use_Pock_Chambolle_scaling
-    c_params.use_bc_scaling = params.use_bc_scaling
-    c_params.use_presolve = params.use_presolve
-    
-    return c_params
+    presolver_value = params.presolver === :pslp ? Int32(0) :
+                      params.presolver === :gpu ? Int32(1) : Int32(2)
+    use_presolve = params.use_presolve && params.presolver !== :none
+    return C_HPRLP_parameters(
+        Int32(params.max_iter), params.stop_tol, params.time_limit,
+        Int32(params.device_number), Int32(params.check_iter),
+        params.CUSPARSE_spmv, params.autotune_verbose,
+        params.enable_progress_monitor, params.enable_progress_control,
+        params.enable_sigma_rebalance_restart,
+        params.use_progress_restart_guard,
+        Int32(params.restart_cooldown_checks),
+        params.debug_restart, params.debug_sigma, params.fixed_sigma,
+        params.use_CR_scaling, params.use_Ruiz_scaling,
+        params.use_Pock_Chambolle_scaling, params.use_bc_scaling,
+        use_presolve, params.enable_gpu_folding, presolver_value,
+        params.use_reduced_matrix,
+        params.auto_reduced_compression_policy,
+        params.print_debug_info,
+        params.specified_parameter_mask)
 end
 
 """
@@ -308,7 +397,7 @@ Solution results from the solver.
 - `gap::Float64`: Duality gap
 - `residuals::Float64`: Residuals
 - `iter::Int`: Total iterations
-- `time::Float64`: Total solution time (seconds)
+- `time::Float64`: Main iteration-loop solve time (seconds)
 - `iter4::Int`: Iterations to 1e-4 tolerance
 - `iter6::Int`: Iterations to 1e-6 tolerance
 - `iter8::Int`: Iterations to 1e-8 tolerance
@@ -319,6 +408,16 @@ Solution results from the solver.
 # Methods
 - `is_optimal(result)`: Check if solution is optimal
 """
+struct Timing
+    total_time::Float64
+    presolve_time::Float64
+    setup_time::Float64
+    scaling_time::Float64
+    analyze_time::Float64
+    power_iteration_time::Float64
+    solve_time::Float64
+end
+
 struct Results
     x::Vector{Float64}
     y::Vector{Float64}
@@ -335,6 +434,18 @@ struct Results
     time4::Float64
     time6::Float64
     time8::Float64
+    timing::Timing
+    interior_percentage::Float64
+    reduced_activation_checks::Int
+    reduced_active_iterations::Int
+    reduced_first_iteration::Int
+    reduced_rebuilds::Int
+    reduced_build_time::Float64
+    reduced_last_trigger_iteration::Int
+    reduced_last_free_ratio::Float64
+    reduced_last_trigger_residual::Float64
+    reduced_last_trigger_sigma::Float64
+    reduced_last_free_columns::Int
 end
 
 """
@@ -380,7 +491,25 @@ function from_c_struct(c_results::C_HPRLP_results, n::Int, m::Int)
         c_results.iter8,
         c_results.time4,
         c_results.time6,
-        c_results.time8
+        c_results.time8,
+        Timing(c_results.timing.total_time,
+               c_results.timing.presolve_time,
+               c_results.timing.setup_time,
+               c_results.timing.scaling_time,
+               c_results.timing.analyze_time,
+               c_results.timing.power_iteration_time,
+               c_results.timing.solve_time),
+        c_results.interior_percentage,
+        Int(c_results.reduced_activation_checks),
+        Int(c_results.reduced_active_iterations),
+        Int(c_results.reduced_first_iteration),
+        Int(c_results.reduced_rebuilds),
+        c_results.reduced_build_time,
+        Int(c_results.reduced_last_trigger_iteration),
+        c_results.reduced_last_free_ratio,
+        c_results.reduced_last_trigger_residual,
+        c_results.reduced_last_trigger_sigma,
+        Int(c_results.reduced_last_free_columns)
     )
     
     # Free C memory

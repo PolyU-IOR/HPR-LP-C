@@ -6,7 +6,7 @@ GPU-accelerated Linear Programming solver using Halpern-Peaceman-Rachford splitt
 
 from .solver import HPRLPSolver, solve, solve_mps, solve_batched
 from .parameters import Parameters
-from .results import Results, BatchedResults
+from .results import Timing, Results, BatchedResults
 from .model import Model
 from .modeling import (
     ModelBuilder, Variable, LinearExpression, Constraint, TwoSidedConstraint,
@@ -16,7 +16,7 @@ from .modeling import (
 try:
     from ._hprlp_core import __version__
 except ImportError:
-    __version__ = "0.1.2"
+    __version__ = "0.1.3"
 
 __all__ = [
     'HPRLPSolver',
@@ -25,6 +25,7 @@ __all__ = [
     'solve_mps',
     'solve_batched',
     'Parameters',
+    'Timing',
     'Results',
     'BatchedResults',
     '__version__',

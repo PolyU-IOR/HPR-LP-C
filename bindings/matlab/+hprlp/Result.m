@@ -37,7 +37,8 @@ classdef Result
         time4       % Time to reach 1e-4 tolerance
         time6       % Time to reach 1e-6 tolerance
         time8       % Time to reach 1e-8 tolerance
-        time        % Total solve time (seconds)
+        time        % Main iteration-loop solve time (seconds)
+        timing      % Detailed HPRLP phase timing struct
         iter4       % Iterations to reach 1e-4 tolerance
         iter6       % Iterations to reach 1e-6 tolerance
         iter8       % Iterations to reach 1e-8 tolerance
@@ -63,6 +64,7 @@ classdef Result
                 obj.time6 = result_struct.time6;
                 obj.time8 = result_struct.time8;
                 obj.time = result_struct.time;
+                obj.timing = result_struct.timing;
                 obj.iter4 = result_struct.iter4;
                 obj.iter6 = result_struct.iter6;
                 obj.iter8 = result_struct.iter8;

@@ -45,6 +45,7 @@ classdef Model < handle
         m              % Number of constraints
         n              % Number of variables  
         obj_constant   % Constant term in objective
+        read_time      % MPS model read/build time (seconds)
     end
     
     properties (Access = private)
@@ -123,6 +124,7 @@ classdef Model < handle
             obj.m = info.m;
             obj.n = info.n;
             obj.obj_constant = obj_constant;  % Use the provided value, not from model
+            obj.read_time = 0.0;
         end
         
         function obj = from_mps(filename)
@@ -146,7 +148,7 @@ classdef Model < handle
             end
             
             % Call MEX function to create model
-            handle = hprlp_mex('create_model_from_mps', filename);
+            [handle, read_time] = hprlp_mex('create_model_from_mps', filename);
             
             % Get model info (m, n, obj_constant) from the C model
             info = hprlp_mex('get_model_info', handle);
@@ -157,6 +159,7 @@ classdef Model < handle
             obj.m = info.m;
             obj.n = info.n;
             obj.obj_constant = info.obj_constant;
+            obj.read_time = read_time;
         end
     end
     

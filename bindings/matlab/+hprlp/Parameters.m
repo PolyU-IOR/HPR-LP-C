@@ -10,13 +10,15 @@ classdef Parameters
     %   time_limit                - Time limit in seconds (default: 3600.0)
     %   device_number             - CUDA device ID to use (default: 0)
     %   check_iter                - Check convergence every N iterations (default: 150)
-    %   CUSPARSE_spmv             - Force cuSPARSE-only SpMV path and disable fused-kernel autotuning (default: false)
+    %   CUSPARSE_spmv             - Force cuSPARSE SpMVOp path and disable fused-kernel autotuning (default: false)
     %   autotune_verbose          - Print backend autotuning diagnostics (default: false)
     %   use_CR_scaling            - Use Curtis-Reid prescaling (default: true)
     %   use_Ruiz_scaling          - Use Ruiz scaling (default: true)
     %   use_Pock_Chambolle_scaling - Use Pock-Chambolle scaling (default: true)
     %   use_bc_scaling            - Use bound constraint scaling (default: true)
     %   use_presolve              - Enable embedded PSLP presolve/postsolve (default: true)
+    %   use_reduced_matrix         - Enable reduced-column iterations in manual mode (default: false)
+    %   auto_reduced_compression_policy - Select reduced/compression from presolved dimensions (default: true)
     %
     % Example:
     %   param = hprlp.Parameters();
@@ -31,13 +33,15 @@ classdef Parameters
         time_limit                = 3600.0      % Time limit in seconds
         device_number             = 0           % GPU device ID
         check_iter                = 150         % Check convergence every N iterations
-        CUSPARSE_spmv             = false       % Force cuSPARSE-only SpMV path
+        CUSPARSE_spmv             = false       % Force cuSPARSE SpMVOp path
         autotune_verbose          = false       % Print backend autotuning diagnostics
         use_CR_scaling            = true        % Use Curtis-Reid prescaling
         use_Ruiz_scaling          = true        % Use Ruiz scaling
         use_Pock_Chambolle_scaling = true       % Use Pock-Chambolle scaling
         use_bc_scaling            = true        % Use bound constraint scaling
         use_presolve              = true        % Enable embedded PSLP presolve/postsolve
+        use_reduced_matrix         = false       % Enable reduced-column iterations in manual mode
+        auto_reduced_compression_policy = true    % Automatic reduced/compression policy
     end
     
     methods
@@ -66,6 +70,8 @@ classdef Parameters
             s.use_Pock_Chambolle_scaling = obj.use_Pock_Chambolle_scaling;
             s.use_bc_scaling = obj.use_bc_scaling;
             s.use_presolve = obj.use_presolve;
+            s.use_reduced_matrix = obj.use_reduced_matrix;
+            s.auto_reduced_compression_policy = obj.auto_reduced_compression_policy;
         end
         
         function disp(obj)
@@ -84,6 +90,8 @@ classdef Parameters
             fprintf('  use_Pock_Chambolle_scaling: %d\n', obj.use_Pock_Chambolle_scaling);
             fprintf('  use_bc_scaling:             %d\n', obj.use_bc_scaling);
             fprintf('  use_presolve:               %d\n', obj.use_presolve);
+            fprintf('  use_reduced_matrix:         %d\n', obj.use_reduced_matrix);
+            fprintf('  auto_reduced_compression_policy: %d\n', obj.auto_reduced_compression_policy);
         end
     end
 end
