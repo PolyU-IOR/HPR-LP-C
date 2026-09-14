@@ -1,5 +1,4 @@
-repository=git@github.com:PolyU-IOR/GPU-Presolver-C.git
+repository=https://github.com/PolyU-IOR/GPU-Presolver-C.git
 branch=main
 commit=f74b085385b76d5dc3c4bfe3d4ac2d221e522020
 vendored_utc=2026-07-19
-

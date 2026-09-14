@@ -1,6 +1,7 @@
 # HPR-LP-C MATLAB Interface
 
-MATLAB interface for HPR-LP-C (Halpern–Peaceman–Rachford Linear Programming) solver — a GPU-accelerated linear programming solver using C/CUDA.
+MATLAB interface for the NVIDIA B200 edition of HPR-LP-C 0.1.3. This package
+targets `sm_100` and requires CUDA Toolkit 13.3 or newer.
 
 ---
 

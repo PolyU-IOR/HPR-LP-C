@@ -59,4 +59,3 @@ private:
 };
 
 }  // namespace cpu_presolve
-

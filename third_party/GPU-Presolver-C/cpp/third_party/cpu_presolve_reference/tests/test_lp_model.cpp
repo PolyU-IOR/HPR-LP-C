@@ -40,4 +40,3 @@ CPU_PRESOLVE_TEST(lp_model_builds_both_sparse_views) {
   CPU_PRESOLVE_REQUIRE(model.csr().row_ptr() == std::vector<int>({0, 2, 3}));
   CPU_PRESOLVE_REQUIRE_NEAR(model.obj_constant(), 7.0, 1.0e-12);
 }
-

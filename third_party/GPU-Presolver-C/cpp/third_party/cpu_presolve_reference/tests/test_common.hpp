@@ -55,4 +55,3 @@ inline void require_near(double actual,
   static name##_registrar name##_registrar_instance;                           \
   }                                                                            \
   void name()
-

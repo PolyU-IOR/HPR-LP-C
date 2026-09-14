@@ -70,4 +70,3 @@ std::size_t LpProblem::nnz() const { return matrix_.nnz(); }
 double LpProblem::objective_constant() const { return objective_constant_; }
 
 }  // namespace gpu_presolver::model
-

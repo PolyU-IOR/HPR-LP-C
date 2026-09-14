@@ -4,7 +4,7 @@
 
 __global__ void residual_compute_Rp_kernel(HPRLP_FLOAT *row_norm, HPRLP_FLOAT *Rp, HPRLP_FLOAT *AL, HPRLP_FLOAT *AU, HPRLP_FLOAT *Ax, int m){
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
     // Check bounds to prevent out-of-bounds access
     if(i < m) {
         HPRLP_FLOAT v = Ax[i];

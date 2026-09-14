@@ -11,19 +11,19 @@ __global__
 void set_vector_value_device_kernel(int *x, int n, int value);
 
 
-__global__ 
+__global__
 void conceptual_b_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int m);
 
 
-__global__ 
+__global__
 void axpy_kernel(HPRLP_FLOAT a, const HPRLP_FLOAT* x, const HPRLP_FLOAT* y, HPRLP_FLOAT* z, int len);
 
 
-__global__ 
+__global__
 void axpby_kernel(HPRLP_FLOAT a, const HPRLP_FLOAT *x, HPRLP_FLOAT b, const HPRLP_FLOAT *y, HPRLP_FLOAT *z, int len);
 
 
-__global__ 
+__global__
 void vector_dot_product_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int n, bool divide = false);
 
 __global__

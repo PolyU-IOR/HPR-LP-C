@@ -49,4 +49,3 @@ CPU_PRESOLVE_TEST(csr_to_csc_preserves_matrix_entries) {
   CPU_PRESOLVE_REQUIRE(csc.row_idx() == std::vector<int>({0, 2, 1, 0, 2}));
   CPU_PRESOLVE_REQUIRE(csc.values() == std::vector<double>({1.0, 5.0, 2.0, 3.0, 7.0}));
 }
-

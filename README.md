@@ -1,28 +1,31 @@
-# HPR-LP-C
+# HPR-LP-C 0.1.3 for NVIDIA B200 and NVIDIA H100
 
-HPR-LP-C is a GPU-accelerated C/CUDA implementation of the Halpern
-Peaceman--Rachford method for solving linear programming problems.
+This publication package is the NVIDIA B200 and NVIDIA H100 edition of
+HPR-LP-C 0.1.3, a GPU-accelerated C/CUDA implementation of the
+Halpern Peaceman--Rachford method for solving linear programming problems.
+It supports Blackwell B200 compute capability 10.0 (`sm_100`) and
+NVIDIA H100 compute capability 9.0 (`sm_90`).
+The build detects the first visible GPU automatically.
+Both targets require CUDA Toolkit 13.3 or newer in this publication package.
 
 ## Quick start
 
-After downloading the v0.1.3 source archive, run:
+Clone the public repository and build the solver:
+
+```bash
+git clone https://github.com/PolyU-IOR/HPR-LP-C.git
+cd HPR-LP-C
+make
+./build/solve_mps_file -i data/model.mps --tol 1e-6 --time-limit 1000
+```
+
+For a downloaded release archive:
 
 ```bash
 unzip HPR-LP-C-0.1.3.zip
 cd HPR-LP-C-0.1.3
-
 make
-./build/solve_mps_file -i data_path --tol 1e-6 --time-limit 1000
-```
-
-Once this source tree is published in a Git repository, the equivalent
-Git-based installation is:
-
-```bash
-git clone git@github.com:PolyU-IOR/HPR-LP-C-private.git HPR-LP-C
-cd HPR-LP-C
-make
-./build/solve_mps_file -i data_path --tol 1e-6 --time-limit 1000
+./build/solve_mps_file -i data/model.mps --tol 1e-6 --time-limit 1000
 ```
 
 The build creates:
@@ -31,33 +34,15 @@ The build creates:
 - `lib/libhprlp.a`; and
 - `lib/libhprlp.so`.
 
-The Makefile detects the first visible GPU architecture. For reproducible
-builds or a machine without a visible GPU during compilation, specify the
-architecture explicitly:
+The Makefile detects the compute capability of the first visible GPU through
+`nvidia-smi`. Consequently, plain `make` selects `sm_90` on H100 and `sm_100`
+on B200:
 
 ```bash
-make GPU_SM=90       # NVIDIA H100
-make GPU_SM=100      # NVIDIA B200
-make GPU_SM=89       # NVIDIA Ada
-make GPU_SM=80       # NVIDIA A100
+make
 ```
 
 Run `make help` to show all build variables and targets.
-
-Version **0.1.3** adds general, runtime-certified structured-matrix backends
-while preserving the public solver interface and a canonical cuSPARSE
-backend. Backend selection depends on matrix structure and device-side
-probes, not model names or file paths.
-
-This corrected v0.1.3 source retains the validated bounded 24-update CUDA
-graph for normal iterations. The batch is used only when it cannot cross a
-convergence-check or output boundary; all other iterations use the original
-single-update graph. The release does not include the rejected persistent,
-unbounded, or instance-dispatched graph experiments.
-
-Residual and adaptive-restart reductions execute on the canonical solver
-stream. This preserves the baseline reduction order at checkpoints while the
-bounded graph accelerates the normal iterations between them.
 
 ## Features
 
@@ -76,8 +61,9 @@ bounded graph accelerates the normal iterations between them.
 The core solver requires:
 
 - Linux on x86-64;
-- an NVIDIA Turing-or-newer GPU with compute capability 7.5 or newer;
-- NVIDIA CUDA Toolkit 12.0 or newer, including `nvcc`, cuBLAS, cuSOLVER,
+- an NVIDIA B200 GPU with compute capability 10.0, or
+  an NVIDIA H100 GPU with compute capability 9.0;
+- NVIDIA CUDA Toolkit 13.3 or newer, including `nvcc`, cuBLAS, cuSOLVER,
   cuSPARSE, and the CUDA driver development library;
 - GCC/G++ with C++17 support, supported by the selected CUDA Toolkit
   (GCC 9--12 recommended);
@@ -86,13 +72,9 @@ The core solver requires:
 
 ### cuSPARSE backend
 
-With CUDA Toolkit 13.3 or newer, the solver enables NVIDIA's experimental
-`cusparseSpMVOp` API and uses `CUSPARSE_SPMVOP_ALG1`. With CUDA Toolkit 12.x or
-13.0--13.2, the same wrapper automatically falls back at compile time to the
-legacy `cusparseSpMV` API with `CUSPARSE_SPMV_CSR_ALG2`, matching the stable
-ALG2 path used by the earlier HPR-LP-C implementation. No runtime option is
-needed. Both backends keep explicit CSR descriptors for `A` and `A^T` and
-invoke them with `CUSPARSE_OPERATION_NON_TRANSPOSE`.
+The B200 and H100 builds enable NVIDIA's experimental `cusparseSpMVOp` API and use
+`CUSPARSE_SPMVOP_ALG1`. It keeps explicit CSR descriptors for `A` and `A^T`
+and invokes them with `CUSPARSE_OPERATION_NON_TRANSPOSE`.
 
 See NVIDIA's [cuSPARSE SpMVOp API reference](https://docs.nvidia.com/cuda/cusparse/#cusparsespmvop-experimental)
 and [CUDA Toolkit 13.3 release notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/).
@@ -113,11 +95,27 @@ not installed at `/usr/local/cuda`, set `CUDA_PATH` or `CUDA_HOME`.
 CUDA_PATH="${CUDA_PATH:-/usr/local/cuda}"
 cmake -S . -B build-cmake \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc" \
-  -DCMAKE_CUDA_ARCHITECTURES=90
+  -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc"
 cmake --build build-cmake
 cmake --install build-cmake --prefix "$HOME/.local"
 ```
+
+The preceding command detects the first visible GPU automatically. For a
+reproducible H100 cross-build, use a separate build directory and set compute
+capability 9.0:
+
+```bash
+CUDA_PATH="${CUDA_PATH:-/usr/local/cuda}"
+cmake -S . -B build-h100 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_COMPILER="$CUDA_PATH/bin/nvcc" \
+  -DCMAKE_CUDA_ARCHITECTURES=90
+cmake --build build-h100
+```
+
+Using a separate directory prevents cached `sm_100` settings and B200 object
+files from being reused in the H100 build. An explicit
+`CMAKE_CUDA_ARCHITECTURES` value always overrides automatic detection.
 
 ### GPU-Presolver-C backend
 
@@ -139,7 +137,7 @@ Use `--presolver pslp` for the original embedded PSLP path or
 For a Make-based staged installation:
 
 ```bash
-make GPU_SM=90
+make GPU_SM=100
 make install PREFIX="$HOME/.local"
 ```
 
@@ -189,9 +187,8 @@ than 50% free columns and row entry less than 40% active rows for three stable
 checks (or less than 25% immediately).  If both candidates are ready, the
 solver selects the direction with the smaller retained dimension ratio.
 Set `HPRLP_USE_ROW_REDUCTION=0` for the former column-only behavior.
-The v0.1.3 Hans-original verification uses `--tol 1e-6`,
-`--time-limit 1000`, and `--check-iter 150`; pass these options explicitly
-when reproducing the release measurements.
+Release validation uses `--tol 1e-6`, `--time-limit 1000`, and
+`--check-iter 150`; pass these options explicitly when comparing runs.
 
 ## Hans dataset run and CSV summary
 
@@ -205,12 +202,16 @@ line-buffered instance logs are written automatically to
 `HPRLP_log.txt`; `--logs-dir` can override the instance-log directory, and
 `--failed-out` enables a failed-instance CSV. The existing `--device` option is
 retained as the single-device fallback when `--devices` is omitted.
+Only solver options supplied explicitly on the script command line (or through
+their corresponding `HPRLP_*` environment variables) are forwarded to
+`solve_mps_file`; `--devices` is translated to one `--device` assignment per
+worker.
 
 ```bash
 python3 scripts/run_hans_dataset.py \
-  --data-dir /data/lp_data/Hans \
+  --data-dir /path/to/Hans \
   --solver ./build/solve_mps_file \
-  --out-dir Results/hans_gpu_latest \
+  --out-dir Results/hans \
   --presolver gpu \
   --gpu-folding true \
   --devices 0,1,2 \
@@ -228,7 +229,7 @@ existing CSV entries by default and writes line-buffered solver output to
 `logs/<instance_name>.log`, with scheduler messages in `batch_solve.log`.
 
 ```bash
-julia scripts/run_dataset.jl /data/lp_data/Hans Results/julia_hans \
+julia scripts/run_dataset.jl /path/to/Hans Results/julia_hans \
   --devices 0,1,2 \
   --presolver gpu --gpu-folding true --tol 1e-6 --time-limit 1000
 ```
@@ -244,9 +245,9 @@ overridden by their corresponding command-line options.
 Build the core library first, then compile and run the examples:
 
 ```bash
-make GPU_SM=90
-make -C examples/c GPU_SM=90 run
-make -C examples/cpp GPU_SM=90 run
+make GPU_SM=100
+make -C examples/c GPU_SM=100 run
+make -C examples/cpp GPU_SM=100 run
 ```
 
 The public API is declared in [`include/HPRLP.h`](include/HPRLP.h). The
@@ -289,7 +290,7 @@ See [`bindings/python/README.md`](bindings/python/README.md).
 Build the shared library first, then instantiate the Julia package:
 
 ```bash
-make GPU_SM=90
+make GPU_SM=100
 bash bindings/julia/install.sh
 julia --project=bindings/julia/package \
   bindings/julia/examples/example_direct_lp.jl
@@ -315,12 +316,26 @@ See [`bindings/matlab/README.md`](bindings/matlab/README.md).
   Unsupported matrices use the canonical cuSPARSE SpMVOp implementation.
 - CUDA virtual-memory allocation is opportunistic; unsupported systems use
   ordinary `cudaMalloc`.
-- Runtime-selected backends can differ across GPU architectures.
-- The current public release is intended primarily for Linux and NVIDIA CUDA.
+- Each binary targets the detected or explicitly selected architecture; it is
+  not portable between H100 and B200. Plain `make` detects a visible H100 as
+  `sm_90`. For cross-builds, use `GPU_SM=90` or
+  `-DCMAKE_CUDA_ARCHITECTURES=90` explicitly.
+- Runtime-selected matrix backends can still differ with model structure.
 
 ## Troubleshooting
 
 ### CUDA compiler not found
+
+```bash
+export CUDA_PATH=/usr/local/cuda
+export PATH="$CUDA_PATH/bin:$PATH"
+make clean
+make GPU_SM=100
+```
+
+For an H100 build, verify that the selected toolkit supports `compute_90`, then
+use `make GPU_SM=90` instead. On systems with more than one `nvcc`, prefer the
+CUDA 13.3 installation explicitly:
 
 ```bash
 export CUDA_PATH=/usr/local/cuda
@@ -336,7 +351,7 @@ Select a GCC version supported by your CUDA release:
 ```bash
 sudo apt-get install -y gcc-12 g++-12
 make clean
-make GPU_SM=90
+make GPU_SM=100
 ```
 
 ### Shared library not found
@@ -349,9 +364,10 @@ export LD_LIBRARY_PATH="/path/to/HPR-LP-C/lib:${LD_LIBRARY_PATH:-}"
 
 ## Version provenance
 
-Version 0.1.3 is based on the official
-[`PolyU-IOR/HPR-LP-C`](https://github.com/PolyU-IOR/HPR-LP-C) `main` commit
-`358295ca9af3a9f1413174f2f63e5bdf3032c548`.
+This NVIDIA B200 and NVIDIA H100 edition of version 0.1.3 extends the official
+[`PolyU-IOR/HPR-LP-C`](https://github.com/PolyU-IOR/HPR-LP-C) 0.1.2 source at
+commit `358295ca9af3a9f1413174f2f63e5bdf3032c548`. See
+[`CHANGELOG.md`](CHANGELOG.md) for the public changes in this release.
 
 ## Citation
 
@@ -363,8 +379,9 @@ Kaihuang Chen, Defeng Sun, Yancheng Yuan, Guojun Zhang, and Xinyuan Zhao,
 ## License
 
 HPR-LP-C is released under the MIT License. See [`LICENSE`](LICENSE).
-The embedded PSLP component retains its own notice in
-[`third_party/PSLP/LICENSE`](third_party/PSLP/LICENSE).
+The vendored presolvers retain their own notices in
+[`third_party/PSLP/LICENSE`](third_party/PSLP/LICENSE) and
+[`third_party/GPU-Presolver-C/LICENSE`](third_party/GPU-Presolver-C/LICENSE).
 
 ## Contributing and support
 

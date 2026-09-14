@@ -1,6 +1,6 @@
 # Contributing to HPR-LP-C
 
-Thank you for your interest in contributing to HPR-LP! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to HPR-LP-C. This document provides guidelines for contributing to the project.
 
 ## Getting Started
 
@@ -18,9 +18,11 @@ Thank you for your interest in contributing to HPR-LP! This document provides gu
 ## Development Setup
 
 ### Prerequisites
-- NVIDIA Turing-or-newer GPU (Compute Capability 7.5+)
-- CUDA Toolkit 13.3+
+- NVIDIA B200 GPU (Compute Capability 10.0)
+- CUDA Toolkit 13.3 or newer
 - GCC 9-12 with C++17 support
+- GNU Make or CMake 3.18 or newer
+- zlib development headers
 - Python 3.8+ (for Python bindings)
 - Julia 1.6+ (for Julia bindings)
 - MATLAB R2020a+ (for MATLAB bindings)
@@ -28,20 +30,21 @@ Thank you for your interest in contributing to HPR-LP! This document provides gu
 ### Building
 ```bash
 make clean
-make -j
+make GPU_SM=100 -j
 ```
 
 ### Quick verification
 ```bash
-# Run the command-line solver
-./build/solve_mps_file -i data/model.mps
+# Run the command-line solver with explicit release settings
+./build/solve_mps_file -i data/model.mps \
+  --tol 1e-6 --time-limit 1000 --check-iter 150
 
 # Run a C++ example
-cd examples/cpp && make && ./example_direct_lp
+make -C examples/cpp GPU_SM=100 run
 
 # Build and run the Python example
-cd bindings/python && python -m pip install .
-python examples/example_direct_lp.py
+python -m pip install ./bindings/python
+python bindings/python/examples/example_direct_lp.py
 ```
 
 ## How to Contribute
@@ -122,4 +125,4 @@ By contributing to HPR-LP-C, you agree that your contributions will be licensed 
 
 ---
 
-Thank you for making HPR-LP better! 🚀
+Thank you for improving HPR-LP-C.

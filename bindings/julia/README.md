@@ -1,6 +1,7 @@
 # HPRLP-C Julia Interface
 
-Julia interface for HPRLP-C (Halpern-Peaceman Rachford Linear Programming) solver - a GPU-accelerated linear programming solver using C/CUDA.
+Julia interface for the NVIDIA B200 edition of HPR-LP-C 0.1.3. This package
+targets `sm_100` and requires CUDA Toolkit 13.3 or newer.
 
 ## Installation
 ```bash

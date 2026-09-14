@@ -17,6 +17,10 @@
 // Version string
 #define HPRLP_VERSION_STRING "0.1.3"
 
+// Publication build target
+#define HPRLP_BUILD_VARIANT "NVIDIA B200"
+#define HPRLP_CUDA_ARCHITECTURE "sm_100"
+
 // Full version number as integer (MAJOR * 10000 + MINOR * 100 + PATCH)
 #define HPRLP_VERSION_NUMBER 103
 

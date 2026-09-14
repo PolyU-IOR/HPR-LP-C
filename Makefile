@@ -1,6 +1,6 @@
 ## Makefile to build HPRLP as a library and executables
 
-# Compiler and CUDA architecture
+# Compiler and CUDA architecture for the NVIDIA B200 release
 # Try to auto-detect CUDA installation
 CUDA_PATH ?= $(shell if [ -n "$${CUDA_HOME}" ] && [ -x "$${CUDA_HOME}/bin/nvcc" ]; then echo "$${CUDA_HOME}"; \
                       elif [ -x "$${HOME}/cuda-13.3/bin/nvcc" ]; then echo "$${HOME}/cuda-13.3"; \
@@ -19,10 +19,24 @@ ifeq ($(shell test -x $(NVCC) && echo yes),)
     $(error CUDA compiler not found at $(NVCC). Please install CUDA or set CUDA_PATH variable)
 endif
 
-# Auto-detect compute capability via nvidia-smi (override with `make GPU_SM=86`)
+# B200 support in this release requires the CUDA 13.3 toolchain.
+CUDA_RELEASE := $(shell $(NVCC) --version 2>/dev/null | sed -n 's/.*release \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
+CUDA_MAJOR := $(word 1,$(CUDA_RELEASE))
+CUDA_MINOR := $(word 2,$(CUDA_RELEASE))
+CUDA_VERSION := $(if $(CUDA_MAJOR),$(CUDA_MAJOR).$(CUDA_MINOR),unknown)
+CUDA_VERSION_OK := $(shell if [ -n "$(CUDA_MAJOR)" ] && \
+	{ [ "$(CUDA_MAJOR)" -gt 13 ] || \
+	  { [ "$(CUDA_MAJOR)" -eq 13 ] && [ "$(CUDA_MINOR)" -ge 3 ]; }; }; \
+	then echo yes; fi)
+ifeq ($(CUDA_VERSION_OK),)
+    $(error NVIDIA B200 builds require CUDA Toolkit 13.3 or newer; found '$(CUDA_VERSION)')
+endif
+
+# Detect the first visible GPU. An explicit `make GPU_SM=<arch>` always wins;
+# when no GPU is visible (for example in a build container), keep B200 sm_100
+# as this publication package's fallback default.
 NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
-# Convert x.y -> xy (e.g., 8.6 -> 86); ignore if N/A
+DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
 ifneq ($(DETECTED_CC),)
 	ifeq ($(DETECTED_CC),N/A)
 		DETECTED_SM :=
@@ -33,15 +47,13 @@ endif
 
 ifeq ($(strip $(GPU_SM)),)
 	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH := -arch=sm_75
+		CUDA_ARCH := -arch=sm_100
 	else
 		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
 	endif
 else
 	CUDA_ARCH := -arch=sm_$(GPU_SM)
 endif
-
-# Using detected GPU architecture: $(CUDA_ARCH)
 
 # Auto-detect suitable GCC version (prefer older versions for compatibility)
 # Try to find GCC-12, GCC-11, GCC-10, or fall back to system default
@@ -349,7 +361,7 @@ help:
 	@echo "  $(RUN_MPS)        - MPS file solver executable"
 	@echo ""
 	@echo "Options:"
-	@echo "  GPU_SM=<arch>     - Override GPU architecture (e.g., make GPU_SM=86)"
+	@echo "  GPU_SM=<arch>     - Override auto-detected GPU architecture"
 	@echo "  CUDA_PATH=<path>  - Override CUDA installation path"
 	@echo "  PREFIX=<path>     - Installation prefix (default: /usr/local)"
 	@echo "  DESTDIR=<path>    - Optional staged-install root"

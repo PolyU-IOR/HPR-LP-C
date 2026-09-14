@@ -14,7 +14,7 @@ from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
 
-MIN_CUDA_VERSION = (12, 4)
+MIN_CUDA_VERSION = (13, 3)
 MIN_CUDA_VERSION_STR = f"{MIN_CUDA_VERSION[0]}.{MIN_CUDA_VERSION[1]}"
 
 
@@ -86,36 +86,8 @@ def _detect_cuda_version(cuda_path: str):
 
 
 def detect_cuda_architectures():
-    """Return a CMake-compatible CUDA architecture list or 'native' as fallback."""
-    env_value = os.environ.get('CMAKE_CUDA_ARCHITECTURES')
-    if env_value:
-        return env_value
-
-    try:
-        output = subprocess.check_output(
-            ['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        return 'native'
-
-    architectures = []
-    for line in output.splitlines():
-        value = line.strip()
-        if not value or value == 'N/A':
-            continue
-        match = re.match(r'^(\d+)\.(\d+)$', value)
-        if not match:
-            continue
-        arch = f"{match.group(1)}{match.group(2)}"
-        if arch not in architectures:
-            architectures.append(arch)
-
-    if not architectures:
-        return 'native'
-
-    return ';'.join(architectures)
+    """Return the B200 architecture, unless a controlled build overrides it."""
+    return os.environ.get('CMAKE_CUDA_ARCHITECTURES', '100')
 
 
 def find_cuda_home():

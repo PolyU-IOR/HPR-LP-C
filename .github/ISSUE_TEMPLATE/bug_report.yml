@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible problem with HPR-LP-C
+title: "[Bug]: "
+labels: ["bug"]
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe what happened and what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the build command, solver command, and a minimal input when possible.
+      placeholder: |
+        1. Build with `make GPU_SM=...`
+        2. Run `./build/solve_mps_file ...`
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        - HPR-LP-C version or commit:
+        - Operating system:
+        - GPU:
+        - CUDA toolkit and driver:
+        - Compiler:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste the complete error message or relevant solver log.
+      render: shell
+
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Data sharing
+      options:
+        - label: I can share the input model publicly or provide a smaller reproducer.

@@ -1,4 +1,33 @@
 cmake_minimum_required(VERSION 3.18)
+
+# Select the CUDA architecture before enabling the CUDA language so compiler
+# identification uses the architecture of the first visible GPU. An explicit
+# -DCMAKE_CUDA_ARCHITECTURES=<arch> always wins. If no GPU is visible, retain
+# the B200 publication package's sm_100 fallback default.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    execute_process(
+        COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+        OUTPUT_VARIABLE DETECTED_CC
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+
+    if(DETECTED_CC AND NOT DETECTED_CC STREQUAL "N/A")
+        # nvidia-smi emits one line per GPU. Build for the first visible one.
+        string(REGEX MATCH "^[0-9]+\\.[0-9]+" DETECTED_CC "${DETECTED_CC}")
+        string(REPLACE "." "" DETECTED_SM "${DETECTED_CC}")
+        string(STRIP "${DETECTED_SM}" DETECTED_SM)
+    endif()
+
+    if(DETECTED_SM)
+        set(CMAKE_CUDA_ARCHITECTURES "${DETECTED_SM}")
+        message(STATUS "Detected CUDA architecture: sm_${DETECTED_SM}")
+    else()
+        set(CMAKE_CUDA_ARCHITECTURES "100")
+        message(STATUS "No visible GPU detected; using B200 fallback: sm_100")
+    endif()
+endif()
+
 project(HPRLP VERSION 0.1.3 LANGUAGES C CXX CUDA)
 
 # CUDA 13's CCCL (Thrust, CUB, and libcu++) requires C++17.
@@ -17,43 +46,15 @@ if(NOT BUILD_STATIC_LIB AND NOT BUILD_SHARED_LIB)
     message(FATAL_ERROR "At least one of BUILD_STATIC_LIB or BUILD_SHARED_LIB must be ON")
 endif()
 
-# Find CUDA toolkit
+# Find the CUDA toolkit required by the NVIDIA B200 release.
 find_package(CUDAToolkit REQUIRED)
 if(CUDAToolkit_VERSION VERSION_LESS 13.3)
-    message(STATUS
-        "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMV CSR ALG2 fallback")
-else()
-    message(STATUS
-        "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMVOp ALG1")
+    message(FATAL_ERROR
+        "The HPR-LP-C 0.1.3 B200 release requires CUDA Toolkit 13.3 or newer; found ${CUDAToolkit_VERSION}")
 endif()
+message(STATUS "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMVOp ALG1")
 find_package(ZLIB REQUIRED)
 find_package(HDF5 QUIET COMPONENTS C)
-
-# Auto-detect CUDA architecture if not specified
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    # Try to detect GPU compute capability using nvidia-smi
-    execute_process(
-        COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-        OUTPUT_VARIABLE DETECTED_CC
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    
-    if(DETECTED_CC AND NOT DETECTED_CC STREQUAL "N/A")
-        # nvidia-smi emits one line per GPU.  Build for the first visible
-        # device so multi-GPU hosts do not produce an invalid architecture
-        # string containing embedded newlines.
-        string(REGEX MATCH "^[0-9]+\\.[0-9]+" DETECTED_CC "${DETECTED_CC}")
-        string(REPLACE "." "" DETECTED_SM "${DETECTED_CC}")
-        string(STRIP "${DETECTED_SM}" DETECTED_SM)
-        set(CMAKE_CUDA_ARCHITECTURES ${DETECTED_SM})
-        message(STATUS "Detected CUDA architecture: sm_${DETECTED_SM}")
-    else()
-        # CUDA 13 no longer supports offline compilation for pre-Turing GPUs.
-        set(CMAKE_CUDA_ARCHITECTURES "75")
-        message(STATUS "Using default CUDA architecture: sm_75")
-    endif()
-endif()
 
 # Auto-detect suitable GCC version (prefer older versions for compatibility)
 # Try to find GCC-12, GCC-11, GCC-10, or fall back to system default
@@ -423,7 +424,7 @@ install(FILES
 
 # Print configuration summary
 message(STATUS "")
-message(STATUS "HPRLP Configuration Summary")
+message(STATUS "HPRLP 0.1.3 B200 Configuration Summary")
 message(STATUS "============================")
 message(STATUS "Version: ${PROJECT_VERSION}")
 message(STATUS "C++ Standard: C++${CMAKE_CXX_STANDARD} (required by CUDA 13 CCCL)")

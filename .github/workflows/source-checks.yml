@@ -1,0 +1,50 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whitespace
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "origin/$GITHUB_BASE_REF...HEAD"
+          else
+            git show --check --format= HEAD
+          fi
+
+      - name: Check Python syntax
+        run: |
+          python3 -m compileall -q bindings/python scripts
+
+      - name: Check shell syntax
+        run: |
+          bash -n bindings/julia/install.sh
+          bash -n bindings/matlab/install.sh
+
+      - name: Check repository hygiene
+        run: |
+          test ! -e bindings/julia/package/Manifest.toml
+          test ! -d optimization_report
+          grep -Fq 'CUDA_ARCH := -arch=sm_100' Makefile
+          grep -Fq 'set(CMAKE_CUDA_ARCHITECTURES "100")' CMakeLists.txt
+          grep -Fq 'MIN_CUDA_VERSION = (13, 3)' bindings/python/setup.py
+          grep -Fq '#define HPRLP_CUDA_ARCHITECTURE "sm_100"' include/api/version.h
+          if grep -R -n -E 'HPR-LP-C-private|/home/[^ ]+|/Users/[^ ]+' \
+              --exclude-dir=.git --exclude-dir=.github \
+              --exclude-dir=third_party .; then
+            echo "Found a private repository name or machine-specific path."
+            exit 1
+          fi

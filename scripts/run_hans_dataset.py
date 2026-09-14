@@ -15,22 +15,6 @@ from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_HPRLP_ENVIRONMENT = {
-    "HPRLP_ENABLE_COMPRESSIBLE_MEMORY": "1",
-    "HPRLP_USE_ROW_REDUCTION": "1",
-    "HPRLP_USE_ROW_COMPRESSED_AUTOTUNE": "1",
-    "HPRLP_USE_REDUCED_COMPRESSED_AUTOTUNE": "1",
-    "HPRLP_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK": "1",
-    "HPRLP_USE_REDUCED_NONEMPTY_CUSPARSE": "1",
-    "HPRLP_REDUCED_RESET_MASK_ON_RESTART": "1",
-    "HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY": "0.25",
-    "HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS": "25000",
-    "HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS": "95000",
-}
-for name, value in DEFAULT_HPRLP_ENVIRONMENT.items():
-    os.environ.setdefault(name, value)
-
-
 CSV_HEADER = [
     "name", "iter", "total_time", "presolve_time", "setup_time",
     "scaling_time", "analyze_time", "power_iteration_time", "solve_time",
@@ -72,13 +56,30 @@ REQUIRED_SUMMARY_FIELDS = {
 }
 SUMMARY_NAMES = {"SGM10", "solved"}
 FAILED_HEADER = ["index", "total", "name", "exit_code", "start", "end", "reason", "log"]
+SOLVER_OPTIONS = (
+    ("--time-limit", "time_limit", "HPRLP_TIME_LIMIT"),
+    ("--tol", "tol", "HPRLP_TOL"),
+    ("--check-iter", "check_iter", "HPRLP_CHECK_ITER"),
+    ("--presolver", "presolver", "HPRLP_PRESOLVER"),
+    ("--gpu-folding", "gpu_folding", "HPRLP_GPU_FOLDING"),
+    ("--reduced-matrix", "reduced_matrix", "HPRLP_REDUCED_MATRIX"),
+    ("--auto-memory-policy", "auto_memory_policy", "HPRLP_AUTO_MEMORY_POLICY"),
+    ("--print-debug-info", "print_debug_info", "HPRLP_PRINT_DEBUG_INFO"),
+    ("--max-iter", "max_iter", "HPRLP_MAX_ITER"),
+)
 
 
-def parse_args():
+def parse_args(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     parser = argparse.ArgumentParser(
         description="Run HPR-LP-C on a Hans dataset and generate HPRLP_result.csv."
     )
-    parser.add_argument("--data-dir", default="/data/lp_data/Hans")
+    parser.add_argument(
+        "--data-dir",
+        required=True,
+        help="Directory containing the Hans *.mps.gz instances",
+    )
     parser.add_argument("--out-dir", default="")
     parser.add_argument("--out", default="")
     parser.add_argument("--log-file", default="")
@@ -122,7 +123,19 @@ def parse_args():
     parser.add_argument("--no-resume", dest="resume", action="store_false")
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args.explicit_options = {
+        token.split("=", 1)[0] for token in argv if token.startswith("--")
+    }
+    return args
+
+
+def requested_solver_options(args):
+    options = []
+    for option, attribute, environment_name in SOLVER_OPTIONS:
+        if option in args.explicit_options or environment_name in os.environ:
+            options.extend([option, str(getattr(args, attribute))])
+    return options
 
 
 def timestamp():
@@ -264,6 +277,13 @@ def main():
     data_dir = Path(args.data_dir)
     solver = Path(args.solver)
     out, combined_log_path, logs_dir, failed = output_paths(args)
+    solver_options = requested_solver_options(args)
+    solver_options_text = " ".join(shlex.quote(part) for part in solver_options)
+    forward_device = bool(
+        {"--devices", "--device"} & args.explicit_options
+        or "HPRLP_DEVICES" in os.environ
+        or "HPRLP_DEVICE" in os.environ
+    )
     try:
         devices = normalize_devices(args.devices, args.device)
     except ValueError as error:
@@ -296,13 +316,8 @@ def main():
     print(f"[hans-run] out={out}")
     print(f"[hans-run] log={combined_log_path}")
     print(f"[hans-run] logs={logs_dir}")
-    print(
-        f"[hans-run] presolver={args.presolver} gpu_folding={args.gpu_folding} "
-        f"reduced_matrix={args.reduced_matrix} "
-        f"auto_memory_policy={args.auto_memory_policy} "
-        f"devices={','.join(map(str, devices))} "
-        f"time_limit={args.time_limit} tol={args.tol}"
-    )
+    print(f"[hans-run] devices={','.join(map(str, devices))}")
+    print(f"[hans-run] solver_options={solver_options_text or '(none)'}")
 
     jobs = queue.Queue()
     for index, mps_path in enumerate(files, start=1):
@@ -321,32 +336,19 @@ def main():
             log_section(combined_log, f"HPRLP Hans run start {timestamp()}")
             combined_log.write(
                 f"data_dir: {data_dir}\nout: {out}\nfailed_out: {failed or 'disabled'}\n"
-                f"logs_dir: {logs_dir}\npresolver: {args.presolver}\n"
-                f"gpu_folding: {args.gpu_folding}\n"
-                f"reduced_matrix: {args.reduced_matrix}\n"
-                f"auto_memory_policy: {args.auto_memory_policy}\n"
+                f"logs_dir: {logs_dir}\n"
                 f"devices: {','.join(map(str, devices))}\n"
-                f"time_limit: {args.time_limit}\ntol: {args.tol}\n"
+                f"solver_options: {solver_options_text or '(none)'}\n"
                 f"matched: {len(files)}\nalready_done: {len(done)}\n"
             )
             combined_log.flush()
 
         def run_instance(index, mps_path, device):
             name = mps_path.name
-            cmd = [
-                str(solver), "-i", str(mps_path),
-                "--device", str(device),
-                "--time-limit", str(args.time_limit),
-                "--tol", str(args.tol),
-                "--check-iter", str(args.check_iter),
-                "--presolver", str(args.presolver),
-                "--gpu-folding", str(args.gpu_folding),
-                "--reduced-matrix", str(args.reduced_matrix),
-                "--auto-memory-policy", str(args.auto_memory_policy),
-                "--print-debug-info", str(args.print_debug_info),
-            ]
-            if args.max_iter:
-                cmd.extend(["--max-iter", str(args.max_iter)])
+            cmd = [str(solver), "-i", str(mps_path)]
+            if forward_device:
+                cmd.extend(["--device", str(device)])
+            cmd.extend(solver_options)
             command_text = " ".join(shlex.quote(part) for part in cmd)
             print(
                 f"[hans-run] run {index}/{len(files)} {name} on device {device}",

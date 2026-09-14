@@ -1,6 +1,6 @@
 #include "cuda_kernels/backends/simple/simple_update_kernels.cuh"
 
-__global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u, 
+__global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRLP_FLOAT *z_bar, HPRLP_FLOAT *x_bar, HPRLP_FLOAT *x_hat, HPRLP_FLOAT *l, HPRLP_FLOAT *u,
                         HPRLP_FLOAT *ATy, HPRLP_FLOAT *c, HPRLP_FLOAT *last_x,
                         const HPRLP_FLOAT *sigma_params, const HPRLP_FLOAT *halpern_factors, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -13,7 +13,7 @@ __global__ void update_zx_check_kernel(HPRLP_FLOAT *x_temp, HPRLP_FLOAT *x, HPRL
         HPRLP_FLOAT z_temp = xi + sigma * ATy_ci;
         HPRLP_FLOAT li = l[i];
         HPRLP_FLOAT ui = u[i];
-        HPRLP_FLOAT x_bar_val = fmin(ui, fmax(li, z_temp));   
+        HPRLP_FLOAT x_bar_val = fmin(ui, fmax(li, z_temp));
         HPRLP_FLOAT z_bar_val = (x_bar_val - z_temp) / sigma;
         HPRLP_FLOAT x_hat_val = 2 * x_bar_val - xi;
         HPRLP_FLOAT x_new_val = fact2 * x_hat_val + fact1 * last_x[i];
@@ -33,12 +33,12 @@ __global__ void update_zx_normal_kernel(HPRLP_FLOAT *x, HPRLP_FLOAT *x_hat, HPRL
         HPRLP_FLOAT sigma = sigma_params[0];
         HPRLP_FLOAT fact1 = halpern_factors[0];
         HPRLP_FLOAT fact2 = halpern_factors[1];
-        
+
         HPRLP_FLOAT xi = x[i];
         HPRLP_FLOAT li = l[i];
         HPRLP_FLOAT ui = u[i];
         HPRLP_FLOAT z_temp = xi + sigma * (ATy[i] - c[i]);
-        HPRLP_FLOAT x_bar_val = fmin(ui, fmax(li, z_temp));            
+        HPRLP_FLOAT x_bar_val = fmin(ui, fmax(li, z_temp));
         HPRLP_FLOAT x_hat_val = 2 * x_bar_val - xi;
         HPRLP_FLOAT x_new_val= fact2 * x_hat_val + fact1 * last_x[i];
         x_hat[i] = x_hat_val;

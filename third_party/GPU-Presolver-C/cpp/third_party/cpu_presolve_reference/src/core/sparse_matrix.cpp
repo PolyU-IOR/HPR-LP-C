@@ -132,4 +132,3 @@ CsrMatrix CscMatrix::to_csr() const {
 }
 
 }  // namespace cpu_presolve
-

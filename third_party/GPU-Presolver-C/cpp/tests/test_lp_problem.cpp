@@ -31,4 +31,3 @@ int main() {
   std::cout << "test_lp_problem passed\n";
   return 0;
 }
-

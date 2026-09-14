@@ -39,4 +39,3 @@ int run_all_tests() {
 int main() {
   return cpu_presolve_tests::run_all_tests();
 }
-

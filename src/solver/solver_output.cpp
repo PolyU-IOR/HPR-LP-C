@@ -71,7 +71,7 @@ private:
         if (
             starts_with(line, "                          HPR-LP Solver") ||
             starts_with(line, "     Halpern Peaceman-Rachford") ||
-            starts_with(line, "  Version: ")) {
+            starts_with(line, "     Version: ")) {
             return true;
         }
 
@@ -164,7 +164,9 @@ void print_solver_banner() {
     std::cout << "                          HPR-LP Solver                           \n";
     std::cout << "     Halpern Peaceman-Rachford Linear Programming Solver          \n";
     std::cout << "                                                                  \n";
-    std::cout << "  Version: " << HPRLP_VERSION_STRING << "                          \n";
+    std::cout << "     Version: " << HPRLP_VERSION_STRING << "                       \n";
+    std::cout << "  Target:  " << HPRLP_BUILD_VARIANT << " ("
+              << HPRLP_CUDA_ARCHITECTURE << ")                       \n";
     std::cout << "                                                                  \n";
     std::cout << "==================================================================\n";
     std::cout << "\n";

@@ -44,4 +44,3 @@ class LpProblem {
 };
 
 }  // namespace gpu_presolver::model
-

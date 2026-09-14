@@ -19,9 +19,10 @@ ifeq ($(shell test -x $(NVCC) && echo yes),)
     $(error CUDA compiler not found at $(NVCC))
 endif
 
-# Auto-detect GPU architecture
+# Match the core build: detect the first visible GPU, allow GPU_SM to override,
+# and use the B200 sm_100 publication target when detection is unavailable.
 NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
 ifneq ($(DETECTED_CC),)
 	ifeq ($(DETECTED_CC),N/A)
 		DETECTED_SM :=
@@ -32,7 +33,7 @@ endif
 
 ifeq ($(strip $(GPU_SM)),)
 	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH := -arch=sm_52
+		CUDA_ARCH := -arch=sm_100
 	else
 		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
 	endif

@@ -1,10 +1,69 @@
+# Build artifacts
 /build/
+/build-*/
 /lib/
 /results/
-
-__pycache__/
-*.py[cod]
+/Results/
 *.o
 *.a
 *.so
 *.so.*
+*.dylib
+*.dll
+*.exe
+*.cubin
+*.fatbin
+*.ptx
+
+# CMake-generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Julia
+/bindings/julia/package/Manifest.toml
+/bindings/julia/package/.CondaPkg/
+/bindings/julia/package/deps/
+LocalPreferences.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# MATLAB
+/bindings/matlab/+hprlp/private/*.mexa64
+/bindings/matlab/+hprlp/private/*.mexmaci64
+/bindings/matlab/+hprlp/private/*.mexw64
+*.asv
+*.mex
+
+# Test and benchmark output
+*.log
+*.out
+*.csv
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local source archives
+/HPR-LP-C-*.zip
