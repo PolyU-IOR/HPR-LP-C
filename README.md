@@ -4,15 +4,15 @@ HPR-LP-C is a GPU-accelerated C/CUDA implementation of the Halpern Peaceman--Rac
 
 ## What's new in v0.1.3
 
-Version 0.1.3 focuses on faster, more robust large-scale LP solving:
+Version 0.1.3 introduces **structure-aware optimizations** for large-scale LP solving:
 
-- GPU-Presolver-C integration with optional folding;
-- adaptive row and column reduction;
-- enhanced CUDA kernels and CUDA graph batching.
+- **Structure-aware SpMV kernels**;
+- **GPU-Presolver-C** integration with optional **folding**;
+- **Sparsity-aware updates**.
 
-On the 49-instance Hans benchmark, v0.1.3 solved all 49 instances and reduced
-SGM10 total time from 12.74 in v0.1.2 to 5.93—about 2.15x
-faster.
+On the **49-instance Hans benchmark**, v0.1.3 **solved all 49 instances** and reduced
+the **SGM10 total time from 12.74 s to 5.93 s**, achieving a **2.15× speedup**
+over v0.1.2.
 
 ![SGM10 total time over HPR-LP-C releases](docs/images/v0.1.3-sgm10-total-time.png)
 
