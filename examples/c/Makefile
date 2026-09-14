@@ -19,26 +19,16 @@ ifeq ($(shell test -x $(NVCC) && echo yes),)
     $(error CUDA compiler not found at $(NVCC))
 endif
 
-# Match the core build: detect the first visible GPU, allow GPU_SM to override,
-# and let nvcc choose a supported default when detection is unavailable.
-NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' ' | grep -E '^[0-9]+\.[0-9]+$$' | head -n1)
-ifneq ($(DETECTED_CC),)
-	ifeq ($(DETECTED_CC),N/A)
-		DETECTED_SM :=
-	else
-		DETECTED_SM := $(subst .,,$(DETECTED_CC))
-	endif
-endif
+# Match the core build's centralized GPU detector and preserve GPU_SM as an
+# explicit cross-build override.
+CUDA_ARCH_DETECTOR := $(HPRLP_ROOT)/scripts/detect_cuda_arch.sh
+DETECTED_SM := $(strip $(shell bash $(CUDA_ARCH_DETECTOR)))
+SELECTED_SM := $(if $(strip $(GPU_SM)),$(strip $(GPU_SM)),$(DETECTED_SM))
 
-ifeq ($(strip $(GPU_SM)),)
-	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH :=
-	else
-		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
-	endif
+ifeq ($(SELECTED_SM),)
+	CUDA_ARCH :=
 else
-	CUDA_ARCH := -arch=sm_$(GPU_SM)
+	CUDA_ARCH := -arch=sm_$(SELECTED_SM)
 endif
 
 # Compiler flags for pure C

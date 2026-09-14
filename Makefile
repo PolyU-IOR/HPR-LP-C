@@ -36,27 +36,25 @@ else
 	CUSPARSE_BACKEND := cusparseSpMV CSR ALG2 fallback
 endif
 
-# Detect the first visible GPU. An explicit `make GPU_SM=<arch>` always wins;
-# when no GPU is visible (for example in a build container), let nvcc choose
-# an architecture supported by the selected toolkit.
-NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' ' | grep -E '^[0-9]+\.[0-9]+$$' | head -n1)
-ifneq ($(DETECTED_CC),)
-	ifeq ($(DETECTED_CC),N/A)
-		DETECTED_SM :=
-	else
-		DETECTED_SM := $(subst .,,$(DETECTED_CC))
-	endif
-endif
+# Detect the first visible GPU. The detector prefers the numeric compute
+# capability reported by nvidia-smi and falls back to model-name mappings for
+# B200, H100, A100, and GeForce RTX 30/40/50 series GPUs. An explicit
+# `make GPU_SM=<arch>` always wins. When no GPU is visible (for example in a
+# build container), let nvcc choose an architecture supported by the toolkit.
+CUDA_ARCH_DETECTOR := scripts/detect_cuda_arch.sh
+DETECTED_SM := $(strip $(shell bash $(CUDA_ARCH_DETECTOR)))
+SELECTED_SM := $(if $(strip $(GPU_SM)),$(strip $(GPU_SM)),$(DETECTED_SM))
 
-ifeq ($(strip $(GPU_SM)),)
-	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH :=
-	else
-		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
-	endif
+ifeq ($(SELECTED_SM),)
+	CUDA_ARCH :=
+	CUDA_ARCH_LABEL := compiler default
 else
-	CUDA_ARCH := -arch=sm_$(GPU_SM)
+	CUDA_ARCH := -arch=sm_$(SELECTED_SM)
+	CUDA_ARCH_LABEL := sm_$(SELECTED_SM)
+	NVCC_SUPPORTED_SMS := $(shell $(NVCC) --list-gpu-code 2>/dev/null)
+	ifeq ($(filter sm_$(SELECTED_SM),$(NVCC_SUPPORTED_SMS)),)
+		$(error CUDA $(CUDA_VERSION) does not support sm_$(SELECTED_SM). Install a newer CUDA Toolkit or override GPU_SM with an architecture supported by this toolkit)
+	endif
 endif
 
 # Auto-detect suitable GCC version (prefer older versions for compatibility)
@@ -372,7 +370,7 @@ help:
 	@echo "  CUDA_PATH:  $(CUDA_PATH)"
 	@echo "  NVCC:       $(NVCC)"
 	@echo "  CUDA:       $(CUDA_VERSION)"
-	@echo "  CUDA_ARCH:  $(CUDA_ARCH)"
+	@echo "  CUDA_ARCH:  $(CUDA_ARCH_LABEL)"
 	@echo "  cuSPARSE:   $(CUSPARSE_BACKEND)"
 	@echo "  LIB_DIR:    $(CUDA_LIB_DIR)"
 

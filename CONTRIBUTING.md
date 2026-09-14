@@ -29,8 +29,7 @@ Thank you for your interest in contributing to HPR-LP-C. This document provides 
 
 ### Building
 ```bash
-make clean
-make GPU_SM=100 -j
+make clean && make -j
 ```
 
 ### Quick verification
@@ -40,7 +39,7 @@ make GPU_SM=100 -j
   --tol 1e-6 --time-limit 1000 --check-iter 150
 
 # Run a C++ example
-make -C examples/cpp GPU_SM=100 run
+make -C examples/cpp run
 
 # Build and run the Python example
 python -m pip install ./bindings/python

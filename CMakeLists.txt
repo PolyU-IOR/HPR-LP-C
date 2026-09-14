@@ -6,20 +6,13 @@ cmake_minimum_required(VERSION 3.18)
 # value unset and let the selected CUDA compiler choose a supported default.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     execute_process(
-        COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-        OUTPUT_VARIABLE DETECTED_CC
+        COMMAND bash "${CMAKE_CURRENT_LIST_DIR}/scripts/detect_cuda_arch.sh"
+        OUTPUT_VARIABLE DETECTED_SM
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
 
-    if(DETECTED_CC AND NOT DETECTED_CC STREQUAL "N/A")
-        # nvidia-smi emits one line per GPU. Build for the first visible one.
-        string(REGEX MATCH "^[0-9]+\\.[0-9]+" DETECTED_CC "${DETECTED_CC}")
-        string(REPLACE "." "" DETECTED_SM "${DETECTED_CC}")
-        string(STRIP "${DETECTED_SM}" DETECTED_SM)
-    endif()
-
-    if(DETECTED_SM)
+    if(DETECTED_SM MATCHES "^[0-9]+$")
         set(CMAKE_CUDA_ARCHITECTURES "${DETECTED_SM}")
         message(STATUS "Detected CUDA architecture: sm_${DETECTED_SM}")
     else()

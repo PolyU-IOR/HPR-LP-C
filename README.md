@@ -13,7 +13,7 @@ Clone the public repository and build the solver:
 ```bash
 git clone https://github.com/PolyU-IOR/HPR-LP-C.git
 cd HPR-LP-C
-make
+make clean && make -j
 ./build/solve_mps_file -i data/model.mps --tol 1e-6 --time-limit 1000
 ```
 
@@ -22,7 +22,7 @@ For a downloaded release archive:
 ```bash
 unzip HPR-LP-C-0.1.3.zip
 cd HPR-LP-C-0.1.3
-make
+make clean && make -j
 ./build/solve_mps_file -i data/model.mps --tol 1e-6 --time-limit 1000
 ```
 
@@ -32,15 +32,28 @@ The build creates:
 - `lib/libhprlp.a`; and
 - `lib/libhprlp.so`.
 
-The Makefile detects the compute capability of the first visible GPU through
-`nvidia-smi`. Consequently, plain `make` selects `sm_90` on H100 and `sm_100`
-on B200:
+The Makefile detects the first visible GPU through `nvidia-smi`, so no
+architecture argument is needed for these GPU families:
+
+| GPU family | Compute capability | Build architecture |
+|---|---:|---:|
+| NVIDIA B200 | 10.0 | `sm_100` |
+| NVIDIA H100 | 9.0 | `sm_90` |
+| NVIDIA A100 | 8.0 | `sm_80` |
+| GeForce RTX 30 series | 8.6 | `sm_86` |
+| GeForce RTX 40 series | 8.9 | `sm_89` |
+| GeForce RTX 50 series | 12.0 | `sm_120` |
+
+The numeric compute capability is preferred; GPU-name matching provides a
+fallback for `nvidia-smi` versions that cannot report it. Build with:
 
 ```bash
-make
+make clean && make -j
 ```
 
-Run `make help` to show all build variables and targets.
+The selected CUDA Toolkit must support the detected architecture. If no GPU is
+visible, `nvcc` chooses its supported default. Run `make help` to inspect the
+selection; `GPU_SM=<arch>` remains available for cross-builds.
 
 ## Features
 
@@ -135,7 +148,7 @@ Use `--presolver pslp` for the original embedded PSLP path or
 For a Make-based staged installation:
 
 ```bash
-make GPU_SM=100
+make clean && make -j
 make install PREFIX="$HOME/.local"
 ```
 
@@ -243,9 +256,9 @@ overridden by their corresponding command-line options.
 Build the core library first, then compile and run the examples:
 
 ```bash
-make GPU_SM=100
-make -C examples/c GPU_SM=100 run
-make -C examples/cpp GPU_SM=100 run
+make clean && make -j
+make -C examples/c run
+make -C examples/cpp run
 ```
 
 The public API is declared in [`include/HPRLP.h`](include/HPRLP.h). The
@@ -288,7 +301,7 @@ See [`bindings/python/README.md`](bindings/python/README.md).
 Build the shared library first, then instantiate the Julia package:
 
 ```bash
-make GPU_SM=100
+make clean && make -j
 bash bindings/julia/install.sh
 julia --project=bindings/julia/package \
   bindings/julia/examples/example_direct_lp.jl
@@ -316,9 +329,10 @@ See [`bindings/matlab/README.md`](bindings/matlab/README.md).
 - CUDA virtual-memory allocation is opportunistic; unsupported systems use
   ordinary `cudaMalloc`.
 - Each binary targets the detected or explicitly selected architecture; it is
-  not portable between H100 and B200. Plain `make` detects a visible H100 as
-  `sm_90`. For cross-builds, use `GPU_SM=90` or
-  `-DCMAKE_CUDA_ARCHITECTURES=90` explicitly.
+  not portable across incompatible GPU architectures. Plain `make` recognizes
+  B200, H100, A100, and GeForce RTX 30/40/50 series GPUs. For cross-builds, use
+  `GPU_SM=<arch>` or
+  `-DCMAKE_CUDA_ARCHITECTURES=<arch>` explicitly.
 - Runtime-selected matrix backends can still differ with model structure.
 
 ## Troubleshooting
@@ -328,19 +342,16 @@ See [`bindings/matlab/README.md`](bindings/matlab/README.md).
 ```bash
 export CUDA_PATH=/usr/local/cuda
 export PATH="$CUDA_PATH/bin:$PATH"
-make clean
-make GPU_SM=100
+make clean && make -j
 ```
 
-For an H100 build, verify that the selected toolkit supports `compute_90`, then
-use `make GPU_SM=90` instead. On systems with more than one `nvcc`, prefer the
-selected CUDA installation explicitly:
+On systems with more than one `nvcc`, prefer the selected CUDA installation
+explicitly. Architecture selection remains automatic:
 
 ```bash
 export CUDA_PATH=/usr/local/cuda
 export PATH="$CUDA_PATH/bin:$PATH"
-make clean
-make GPU_SM=90
+make clean && make -j
 ```
 
 ### Unsupported host compiler
@@ -349,8 +360,7 @@ Select a GCC version supported by your CUDA release:
 
 ```bash
 sudo apt-get install -y gcc-12 g++-12
-make clean
-make GPU_SM=100
+make clean && make -j
 ```
 
 ### Shared library not found

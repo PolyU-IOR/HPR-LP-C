@@ -33,12 +33,18 @@ jobs:
         run: |
           bash -n bindings/julia/install.sh
           bash -n bindings/matlab/install.sh
+          bash -n scripts/detect_cuda_arch.sh
+          bash -n tests/detect_cuda_arch_test.sh
+
+      - name: Check CUDA architecture detection
+        run: bash tests/detect_cuda_arch_test.sh
 
       - name: Check repository hygiene
         run: |
           test ! -e bindings/julia/package/Manifest.toml
           test ! -d optimization_report
           grep -Fq 'CUDA_HAS_SPMVOP :=' Makefile
+          grep -Fq 'CUDA_ARCH_DETECTOR := scripts/detect_cuda_arch.sh' Makefile
           grep -Fq 'CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.3' CMakeLists.txt
           grep -Fq 'SPMVOP_MIN_CUDA_VERSION = (13, 3)' bindings/python/setup.py
           grep -Fq '#define HPRLP_CUDA_ARCHITECTURE "auto"' include/api/version.h

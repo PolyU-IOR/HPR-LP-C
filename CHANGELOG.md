@@ -13,6 +13,10 @@ All notable public changes to HPR-LP-C are recorded here. The project follows
 - Made Make, CMake, examples, and Python packaging use a detected or
   compiler-supported CUDA architecture instead of assuming `sm_100` when no
   GPU is visible.
+- Centralized architecture detection for plain Make and CMake builds. B200,
+  H100, A100, and GeForce RTX 30/40/50 series GPUs select `sm_100`, `sm_90`,
+  `sm_80`, `sm_86`, `sm_89`, and `sm_120`, respectively, while `GPU_SM`
+  remains available as an explicit override.
 - Renamed generic CUDA launch macros that collided with CUDA 13.0
   `cooperative_groups` internals.
 
