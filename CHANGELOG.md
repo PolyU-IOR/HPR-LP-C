@@ -82,8 +82,3 @@ All notable public changes to HPR-LP-C are recorded here. The project follows
   NVIDIA B200 compute capability 10.0 (`sm_100`).
 - Reference validation uses tolerance `1e-6`, a 1,000-second time limit, and a
   convergence-check interval of 150 iterations.
-
-## [0.1.2]
-
-The 0.1.2 public baseline is official repository commit
-`358295ca9af3a9f1413174f2f63e5bdf3032c548`.
