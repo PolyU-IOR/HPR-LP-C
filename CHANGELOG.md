@@ -3,6 +3,19 @@
 All notable public changes to HPR-LP-C are recorded here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Removed the CUDA Toolkit 13.3 build-time requirement. CUDA 13.3 and newer
+  automatically use experimental `cusparseSpMVOp` ALG1; older toolkits compile
+  the regular `cusparseSpMV` CSR ALG2 fallback.
+- Made Make, CMake, examples, and Python packaging use a detected or
+  compiler-supported CUDA architecture instead of assuming `sm_100` when no
+  GPU is visible.
+- Renamed generic CUDA launch macros that collided with CUDA 13.0
+  `cooperative_groups` internals.
+
 ## [0.1.3] - 2026-08-21
 
 ### Added

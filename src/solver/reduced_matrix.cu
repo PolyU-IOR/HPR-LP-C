@@ -3202,13 +3202,13 @@ bool refresh_reduced_row_mask(
         state->row_changed_device, 0, sizeof(int), workspace->stream));
     if (state->row_mask_started) {
         update_y_bar_mask_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->y_bar_mask, workspace->y_bar,
             state->row_changed_device,
             state->row_active_count_by_warp_device, workspace->m);
     } else {
         initialize_y_bar_mask_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->y_bar_mask, workspace->y_bar, workspace->AL,
             workspace->AU, workspace->y_bound_type,
             state->row_changed_device,
@@ -3367,7 +3367,7 @@ bool build_reduced_row_workspace(
         &state->row_active_to_original, state->row_active_count);
     if (workspace->m > 0) {
         scatter_active_row_indices_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->y_bar_mask, state->row_active_count_by_warp_device,
             state->row_active_to_original, workspace->m);
     }
@@ -3381,7 +3381,7 @@ bool build_reduced_row_workspace(
         state->row_A.rowPtr, 0, sizeof(int), workspace->stream));
     if (state->row_active_count > 0) {
         selected_csr_row_lengths_kernel<<<
-            numBlocks(state->row_active_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->row_active_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->row_A.rowPtr, state->row_active_to_original,
             workspace->A->rowPtr, state->row_active_count);
@@ -3498,7 +3498,7 @@ bool build_reduced_row_workspace(
     if (!state->use_compact_row_y) {
         if (reduced_nnz > 0) {
             remap_compact_row_columns_kernel<<<
-                numBlocks(reduced_nnz), numThreads, 0,
+                HPRLP_NUM_BLOCKS(reduced_nnz), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_AT.colIndex, state->row_active_to_original,
                 reduced_nnz);
@@ -3519,7 +3519,7 @@ bool build_reduced_row_workspace(
         allocate_device(&state->row_AT_row_buckets, workspace->n);
         if (workspace->n > 0) {
             analyze_compact_rows_kernel<<<
-                numBlocks(workspace->n), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_AT.rowPtr, state->row_AT_row_buckets,
                 state->base_row_analysis_device, workspace->n);
@@ -3531,7 +3531,7 @@ bool build_reduced_row_workspace(
             &state->row_A_row_buckets, state->row_base_count);
         if (state->row_base_count > 0) {
             analyze_compact_rows_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_A.rowPtr, state->row_A_row_buckets,
                 state->base_row_analysis_device + kReducedRowAnalysisFields,
@@ -3601,7 +3601,7 @@ bool build_reduced_row_workspace(
         allocate_device(&state->row_lower, state->row_active_count);
         allocate_device(&state->row_upper, state->row_active_count);
         gather_reduced_row_state_kernel<<<
-            numBlocks(state->row_active_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->row_active_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->row_y, state->row_last_y, state->row_lower,
             state->row_upper, workspace->y, workspace->last_y,
@@ -3619,7 +3619,7 @@ bool build_reduced_row_workspace(
         }
         if (state->row_active_count > 0) {
             gather_reduced_row_backend_state_kernel<<<
-                numBlocks(state->row_active_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_active_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_inverse_row_norm, state->row_scaled_y,
                 state->row_bound_type, workspace->inverse_row_norm,
@@ -3633,7 +3633,7 @@ bool build_reduced_row_workspace(
             state->row_AT.numElements);
         if (state->row_AT.numElements > 0) {
             pack_signed_entries_u32_kernel<<<
-                numBlocks(state->row_AT.numElements), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_AT.numElements), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_AT_packed_entries_u32,
                 state->row_AT.colIndex, state->row_AT.value,
@@ -3650,7 +3650,7 @@ bool build_reduced_row_workspace(
             workspace->stream));
         if (state->row_active_count > 0) {
             scatter_original_to_selected_rows_kernel<<<
-                numBlocks(state->row_active_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_active_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_original_to_active,
                 state->row_active_to_original,
@@ -3672,7 +3672,7 @@ bool build_reduced_row_workspace(
             state->row_A.numElements);
         if (state->row_A.numElements > 0) {
             pack_signed_entries_u32_kernel<<<
-                numBlocks(state->row_A.numElements), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_A.numElements), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_A_packed_entries_u32,
                 state->row_A.colIndex, state->row_A.value,
@@ -3693,7 +3693,7 @@ bool build_reduced_row_workspace(
         }
     }
     zero_inactive_y_state_kernel<<<
-        numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         workspace->y, workspace->last_y, state->y_bar_mask, workspace->m);
     const auto row_backend_profile_started =
         std::chrono::steady_clock::now();
@@ -3770,7 +3770,7 @@ bool rebuild_reduced_row_delta_workspace(
     const auto start = std::chrono::steady_clock::now();
 
     count_delta_rows_by_warp_kernel<<<
-        numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->y_bar_mask, state->row_base_mask,
         state->row_active_count_by_warp_device, workspace->m);
     std::size_t select_scan_temp_bytes = 0;
@@ -3789,7 +3789,7 @@ bool rebuild_reduced_row_delta_workspace(
         state->row_active_count_warp_count, workspace->stream));
     allocate_device(&state->row_delta_to_original, delta_count);
     scatter_delta_row_indices_kernel<<<
-        numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->y_bar_mask, state->row_base_mask,
         state->row_active_count_by_warp_device,
         state->row_delta_to_original, workspace->m);
@@ -3802,7 +3802,7 @@ bool rebuild_reduced_row_delta_workspace(
     CUDA_CHECK(cudaMemsetAsync(
         delta_A.rowPtr, 0, sizeof(int), workspace->stream));
     selected_csr_row_lengths_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         delta_A.rowPtr, state->row_delta_to_original,
         workspace->A->rowPtr, delta_count);
     std::size_t row_scan_temp_bytes = 0;
@@ -3838,7 +3838,7 @@ bool rebuild_reduced_row_delta_workspace(
     if (!state->use_compact_row_y) {
         if (delta_nnz > 0) {
             remap_compact_row_columns_kernel<<<
-                numBlocks(delta_nnz), numThreads, 0,
+                HPRLP_NUM_BLOCKS(delta_nnz), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_delta_AT.colIndex,
                 state->row_delta_to_original, delta_nnz);
@@ -3852,7 +3852,7 @@ bool rebuild_reduced_row_delta_workspace(
         allocate_device(&state->row_delta_lower, delta_count);
         allocate_device(&state->row_delta_upper, delta_count);
         gather_reduced_row_state_kernel<<<
-            numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->row_delta_y, state->row_delta_last_y,
             state->row_delta_lower, state->row_delta_upper,
             workspace->y, workspace->last_y,
@@ -3909,7 +3909,7 @@ void enqueue_reduced_row_iteration_updates(
             ? state->row_delta_AT.rowPtr : nullptr;
         if (state->row_AT_short_count > 0) {
             fused_reduced_row_x_short_kernel<<<
-                numBlocks(state->row_AT_short_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_AT_short_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->x, workspace->x_hat,
                 workspace->l, workspace->u, workspace->x_bound_type,
@@ -3943,7 +3943,7 @@ void enqueue_reduced_row_iteration_updates(
             at.ATy_cusparseDescr), "row-reduced AT SpMVOp");
         if (state->row_delta_count > 0) {
             update_reduced_row_x_with_delta_kernel<<<
-                numBlocks(workspace->n), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->x, workspace->x_hat,
                 workspace->l, workspace->u, workspace->ATy,
@@ -3956,7 +3956,7 @@ void enqueue_reduced_row_iteration_updates(
                 workspace->halpern_factors, workspace->n);
         } else {
             update_zx_normal_kernel<<<
-                numBlocks(workspace->n), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->x, workspace->x_hat,
                 workspace->l, workspace->u, workspace->ATy,
@@ -3971,7 +3971,7 @@ void enqueue_reduced_row_iteration_updates(
         !state->row_use_signed_x &&
         !state->row_use_packed_dictionary_x) {
         vector_dot_product_kernel<<<
-            numBlocks(workspace->n), numThreads, 0,
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             workspace->x_hat, workspace->inverse_col_norm,
             workspace->unit_scaled_x_hat, workspace->n, false);
@@ -4061,7 +4061,7 @@ void enqueue_reduced_row_iteration_updates(
             ? nullptr : state->row_active_to_original;
         if (state->row_A_short_count > 0) {
             fused_reduced_row_y_short_kernel<<<
-                numBlocks(state->row_A_short_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_A_short_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 y, lower, upper, last_y, workspace->x_hat,
                 state->row_A.rowPtr, state->row_A.colIndex,
@@ -4087,7 +4087,7 @@ void enqueue_reduced_row_iteration_updates(
             a.Ax_cusparseDescr), "row-reduced A SpMVOp");
         if (state->use_compact_row_y) {
             update_reduced_row_y_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_y, state->row_lower, state->row_upper,
                 state->row_Ax, state->row_last_y,
@@ -4095,7 +4095,7 @@ void enqueue_reduced_row_iteration_updates(
                 state->row_base_count);
         } else {
             update_reduced_row_y_full_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->y, workspace->AL, workspace->AU,
                 state->row_Ax, workspace->last_y,
@@ -4107,7 +4107,7 @@ void enqueue_reduced_row_iteration_updates(
     if (state->row_delta_count > 0) {
         if (state->use_compact_row_y) {
             update_reduced_row_delta_y_kernel<<<
-                numBlocks(state->row_delta_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_delta_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_delta_y, state->row_delta_lower,
                 state->row_delta_upper, state->row_delta_last_y,
@@ -4118,7 +4118,7 @@ void enqueue_reduced_row_iteration_updates(
                 state->row_delta_count);
         } else {
             update_reduced_row_delta_y_full_kernel<<<
-                numBlocks(state->row_delta_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_delta_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->y, workspace->AL, workspace->AU,
                 workspace->last_y, workspace->x_hat,
@@ -4134,7 +4134,7 @@ void enqueue_reduced_row_iteration_updates(
         !state->row_use_signed_y &&
         !state->row_use_packed_dictionary_y) {
         vector_dot_product_kernel<<<
-            numBlocks(state->row_base_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->row_y, state->row_inverse_row_norm,
             state->row_scaled_y, state->row_base_count, false);
@@ -4216,7 +4216,7 @@ void profile_reduced_row_backend_candidates(
             state->row_inverse_row_norm != nullptr &&
             state->row_base_count > 0) {
             vector_dot_product_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_y, state->row_inverse_row_norm,
                 state->row_scaled_y, state->row_base_count, false);
@@ -4471,7 +4471,7 @@ void refresh_reduced_factor_scaled_y(
         return;
     }
     vector_dot_product_kernel<<<
-        numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         workspace->y, workspace->inverse_row_norm,
         workspace->unit_scaled_y, workspace->m, false);
 }
@@ -4486,7 +4486,7 @@ void refresh_reduced_factor_scaled_x_hat(
         return;
     }
     vector_dot_product_kernel<<<
-        numBlocks(state->base_count), numThreads, 0,
+        HPRLP_NUM_BLOCKS(state->base_count), HPRLP_NUM_THREADS, 0,
         workspace->stream>>>(
         state->x_hat, state->compact_inverse_col_norm,
         state->compact_scaled_x_hat, state->base_count, false);
@@ -4663,7 +4663,7 @@ int build_nonempty_row_metadata_gpu(
     allocate_device(&count_device, 1);
     if (row_count > 0) {
         mark_nonempty_row_flags_kernel<<<
-            numBlocks(row_count), numThreads, 0, stream>>>(
+            HPRLP_NUM_BLOCKS(row_count), HPRLP_NUM_THREADS, 0, stream>>>(
                 row_ptr, flags, row_count);
     }
     std::size_t scan_bytes = 0;
@@ -4691,7 +4691,7 @@ int build_nonempty_row_metadata_gpu(
     }
     if (row_count > 0) {
         scatter_nonempty_row_metadata_kernel<<<
-            numBlocks(row_count), numThreads, 0, stream>>>(
+            HPRLP_NUM_BLOCKS(row_count), HPRLP_NUM_THREADS, 0, stream>>>(
                 row_ptr, flags, prefix, *original_to_nonempty,
                 *nonempty_to_original, *nonempty_row_ptr, row_count,
                 nonzero_count, nonempty_count);
@@ -4873,7 +4873,7 @@ void compute_fixed_shift(
     HPRLP_FLOAT *fixed_values = nullptr;
     allocate_device(&fixed_values, workspace->n);
     fixed_values_from_mask_kernel<<<
-        numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         fixed_values, state->x_bar_mask, workspace->l, workspace->u,
         workspace->n);
 
@@ -5050,7 +5050,7 @@ void build_device_medium_long_buckets(
     CUDA_CHECK(cudaMemsetAsync(
         scratch_counts, 0, 2 * sizeof(int), stream));
     collect_compact_medium_long_rows_kernel<<<
-        numBlocks(row_count), numThreads, 0, stream>>>(
+        HPRLP_NUM_BLOCKS(row_count), HPRLP_NUM_THREADS, 0, stream>>>(
         row_ptr, *row_buckets, scratch_counts, row_count);
     if (medium_count > 0) *medium_rows = *row_buckets;
     if (long_count > 0) {
@@ -5077,7 +5077,7 @@ void build_device_empty_short_buckets(
     CUDA_CHECK(cudaMemsetAsync(
         scratch_counts, 0, 2 * sizeof(int), stream));
     collect_compact_empty_short_rows_kernel<<<
-        numBlocks(row_count), numThreads, 0, stream>>>(
+        HPRLP_NUM_BLOCKS(row_count), HPRLP_NUM_THREADS, 0, stream>>>(
         row_ptr, *row_buckets, scratch_counts, row_count);
     if (short_nonempty_count > 0) {
         *short_nonempty_rows = *row_buckets;
@@ -5101,7 +5101,7 @@ bool build_reduced_workspace(
     // the full mask to host.
     if (workspace->n > 0) {
         count_interior_columns_by_warp_kernel<<<
-            numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->x_bar_mask, state->free_count_by_warp_device,
             workspace->n);
         std::size_t select_scan_temp_bytes = 0;
@@ -5120,7 +5120,7 @@ bool build_reduced_workspace(
             state->free_count_by_warp_device,
             state->free_count_warp_count, workspace->stream));
         scatter_interior_column_indices_kernel<<<
-            numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->x_bar_mask, state->free_count_by_warp_device,
             state->delta_indices_device, workspace->n);
     }
@@ -5143,7 +5143,7 @@ bool build_reduced_workspace(
         state->AT.rowPtr, 0, sizeof(int), workspace->stream));
     if (state->free_count > 0) {
         selected_csr_row_lengths_kernel<<<
-            numBlocks(state->free_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->free_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->AT.rowPtr, state->free_to_original,
             workspace->AT->rowPtr, state->free_count);
@@ -5191,14 +5191,14 @@ bool build_reduced_workspace(
         2 * kReducedRowAnalysisFields * sizeof(int), workspace->stream));
     if (state->free_count > 0) {
         analyze_compact_rows_kernel<<<
-            numBlocks(state->free_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->free_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->AT.rowPtr, state->AT_row_buckets,
             state->base_row_analysis_device, state->free_count);
     }
     if (workspace->m > 0) {
         analyze_compact_rows_kernel<<<
-            numBlocks(workspace->m), numThreads, 0,
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->A.rowPtr, state->A_row_buckets,
             state->base_row_analysis_device + kReducedRowAnalysisFields,
@@ -5566,7 +5566,7 @@ bool build_reduced_workspace(
             &state->unit_AT_constraint_index, state->AT.numElements);
         if (state->AT.numElements > 0) {
             compact_u16_indices_kernel<<<
-                numBlocks(state->AT.numElements), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->AT.numElements), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->unit_AT_constraint_index, state->AT.colIndex,
                 state->AT.numElements);
@@ -5581,7 +5581,7 @@ bool build_reduced_workspace(
                 &state->signed_AT_negative, state->AT.numElements);
             if (state->AT.numElements > 0) {
                 pack_signed_split_u16_kernel<<<
-                    numBlocks(state->AT.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->AT.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->signed_AT_constraint_index,
                     state->signed_AT_negative, state->AT.colIndex,
@@ -5592,7 +5592,7 @@ bool build_reduced_workspace(
                 &state->signed_AT_entries_u16, state->AT.numElements);
             if (state->AT.numElements > 0) {
                 pack_signed_entries_u16_kernel<<<
-                    numBlocks(state->AT.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->AT.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->signed_AT_entries_u16, state->AT.colIndex,
                     state->AT.value, state->AT.numElements);
@@ -5602,7 +5602,7 @@ bool build_reduced_workspace(
                 &state->signed_AT_entries_u32, state->AT.numElements);
             if (state->AT.numElements > 0) {
                 pack_signed_entries_u32_kernel<<<
-                    numBlocks(state->AT.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->AT.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->signed_AT_entries_u32, state->AT.colIndex,
                     state->AT.value, state->AT.numElements);
@@ -5613,7 +5613,7 @@ bool build_reduced_workspace(
                 &state->signed_A_entries_u16, state->A.numElements);
             if (state->A.numElements > 0) {
                 pack_signed_entries_u16_kernel<<<
-                    numBlocks(state->A.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->A.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->signed_A_entries_u16, state->A.colIndex,
                     state->A.value, state->A.numElements);
@@ -5623,7 +5623,7 @@ bool build_reduced_workspace(
                 &state->signed_A_entries_u32, state->A.numElements);
             if (state->A.numElements > 0) {
                 pack_signed_entries_u32_kernel<<<
-                    numBlocks(state->A.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->A.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->signed_A_entries_u32, state->A.colIndex,
                     state->A.value, state->A.numElements);
@@ -5647,7 +5647,7 @@ bool build_reduced_workspace(
                 state->AT.numElements);
             if (state->AT.numElements > 0) {
                 repack_uniform_degree_dictionary_rows_soa_kernel<<<
-                    numBlocks(state->AT.numElements), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->AT.numElements), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->dictionary_AT_entries_u32,
                     state->dictionary_AT_entries_soa,
@@ -5663,8 +5663,8 @@ bool build_reduced_workspace(
                 &state->dictionary_AT_to_A_code,
                 workspace->coefficient_dictionary_size);
             build_dictionary_code_translation_kernel<<<
-                numBlocks(workspace->coefficient_dictionary_size),
-                numThreads, 0, workspace->stream>>>(
+                HPRLP_NUM_BLOCKS(workspace->coefficient_dictionary_size),
+                HPRLP_NUM_THREADS, 0, workspace->stream>>>(
                 state->dictionary_AT_to_A_code,
                 workspace->coefficient_dictionary,
                 workspace->coefficient_dictionary_size,
@@ -5689,7 +5689,7 @@ bool build_reduced_workspace(
             &state->compact_inverse_col_norm, state->free_count);
         if (state->free_count > 0) {
             gather_selected_values_kernel<<<
-                numBlocks(state->free_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->free_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->compact_inverse_col_norm,
                 workspace->inverse_col_norm,
@@ -5719,7 +5719,7 @@ bool build_reduced_workspace(
     }
     if (state->free_count > 0) {
         gather_reduced_state_kernel<<<
-            numBlocks(state->free_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->free_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             state->x, state->x_bar, state->x_hat, state->last_x,
             state->lower, state->upper, state->objective,
@@ -5731,7 +5731,7 @@ bool build_reduced_workspace(
     }
     compute_fixed_shift(workspace, state);
     scatter_fixed_bounds_kernel<<<
-        numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         workspace->x, workspace->x_bar, workspace->x_hat,
         workspace->last_x, workspace->l, workspace->u,
         state->x_bar_mask, workspace->n);
@@ -5881,7 +5881,7 @@ bool extend_reduced_delta_workspace(
     CUDA_CHECK(cudaMemsetAsync(
         state->delta_AT.rowPtr, 0, sizeof(int), workspace->stream));
     selected_csr_row_lengths_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->delta_AT.rowPtr, state->delta_free_to_original,
         workspace->AT->rowPtr, delta_count);
 
@@ -5936,7 +5936,7 @@ bool extend_reduced_delta_workspace(
             workspace->stream));
         if (workspace->m > 0) {
             mark_nonempty_csr_rows_kernel<<<
-                numBlocks(workspace->m), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->delta_A.rowPtr,
                 state->delta_signed_A_nonempty_words,
@@ -5950,13 +5950,13 @@ bool extend_reduced_delta_workspace(
             &state->delta_signed_A_entries_u32, state->delta_nnz);
         if (state->delta_nnz > 0) {
             pack_signed_entries_u32_kernel<<<
-                numBlocks(state->delta_nnz), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->delta_nnz), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->delta_signed_AT_entries_u32,
                 state->delta_AT.colIndex, state->delta_AT.value,
                 state->delta_nnz);
             pack_signed_entries_u32_kernel<<<
-                numBlocks(state->delta_nnz), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->delta_nnz), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->delta_signed_A_entries_u32,
                 state->delta_A.colIndex, state->delta_A.value,
@@ -5975,19 +5975,19 @@ bool extend_reduced_delta_workspace(
         state->delta_row_bucket_counts_device, 0, 4 * sizeof(int),
         workspace->stream));
     build_compact_row_buckets_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->delta_AT.rowPtr, state->delta_AT_row_buckets,
         state->delta_row_bucket_counts_device, delta_count);
     if (use_empty_row_batch && workspace->m > 0 &&
         delta_nnz > 0) {
         build_delta_only_row_list_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->A.rowPtr, state->delta_A.rowPtr,
             state->delta_A_row_buckets,
             state->delta_row_bucket_counts_device + 2, workspace->m);
     } else if (workspace->m > 0 && !use_empty_row_batch) {
         build_compact_row_buckets_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->delta_A.rowPtr, state->delta_A_row_buckets,
             state->delta_row_bucket_counts_device + 2, workspace->m);
     }
@@ -6030,7 +6030,7 @@ bool extend_reduced_delta_workspace(
         allocate_delta(&state->delta_scaled_fixed, delta_count);
     }
     gather_reduced_state_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->delta_x, state->delta_x_bar, state->delta_x_hat,
         state->delta_last_x, state->delta_lower, state->delta_upper,
         state->delta_objective, state->delta_bound_type,
@@ -6048,17 +6048,17 @@ bool extend_reduced_delta_workspace(
             allocate_delta(&state->delta_input, delta_count);
         }
         fixed_values_from_mask_kernel<<<
-            numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->delta_fixed, state->delta_old_mask,
             state->delta_lower, state->delta_upper, delta_count);
     }
     if (use_signed_delta) {
         gather_selected_values_kernel<<<
-            numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->delta_inverse_col_norm, workspace->inverse_col_norm,
             state->delta_free_to_original, delta_count);
         build_scaled_fixed_delta_kernel<<<
-            numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->delta_scaled_fixed, state->delta_inverse_col_norm,
             state->delta_old_mask, state->delta_lower, state->delta_upper,
             delta_count);
@@ -6201,7 +6201,7 @@ void enqueue_reduced_x_updates(
                 kReducedVectorThreads, workspace->stream);
         } else if (state->use_fused_x) {
             if (state->AT_short_count > 0) fused_reduced_x_short_kernel<<<
-                numBlocks(state->AT_short_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->AT_short_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->x, state->x_hat, state->lower, state->upper,
                 state->bound_type, state->objective, state->last_x,
@@ -6259,7 +6259,7 @@ void enqueue_reduced_x_updates(
             if (state->delta_AT_short_count > 0) {
                 if (state->delta_input != nullptr) {
                     fused_reduced_delta_x_short_with_input_kernel<<<
-                        numBlocks(state->delta_AT_short_count), numThreads,
+                        HPRLP_NUM_BLOCKS(state->delta_AT_short_count), HPRLP_NUM_THREADS,
                         0, workspace->stream>>>(
                         state->delta_x, state->delta_x_hat,
                         state->delta_input, state->delta_fixed,
@@ -6274,7 +6274,7 @@ void enqueue_reduced_x_updates(
                         state->delta_AT_short_count);
                 } else {
                     fused_reduced_x_short_kernel<<<
-                    numBlocks(state->delta_AT_short_count), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->delta_AT_short_count), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     state->delta_x, state->delta_x_hat,
                     state->delta_lower, state->delta_upper,
@@ -6470,7 +6470,7 @@ void enqueue_reduced_y_updates(
             workspace->m);
     } else if (state->use_fused_y) {
         if (state->A_short_count > 0) fused_reduced_y_short_kernel<<<
-            numBlocks(state->A_short_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->A_short_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             workspace->y, workspace->AL, workspace->AU,
             workspace->y_bound_type, workspace->last_y, state->x_hat, state->A.rowPtr, state->A.colIndex, state->A.value,
@@ -6546,7 +6546,7 @@ void enqueue_reduced_y_updates(
         (use_delta && !state->use_fused_y);
     if (state->use_packed_dictionary_x && !y_kernel_wrote_scaled_y) {
         vector_dot_product_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             workspace->y, workspace->inverse_row_norm,
             workspace->unit_scaled_y, workspace->m, false);
     }
@@ -6601,7 +6601,7 @@ void enqueue_reduced_generic_nonempty_y_updates(
     bool use_delta) {
     if (state->signed_A_short_nonempty_count > 0)
         fused_reduced_y_short_kernel<<<
-            numBlocks(state->signed_A_short_nonempty_count), numThreads, 0,
+            HPRLP_NUM_BLOCKS(state->signed_A_short_nonempty_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
             workspace->y, workspace->AL, workspace->AU,
             workspace->y_bound_type, workspace->last_y, state->x_hat,
@@ -6818,7 +6818,7 @@ void enqueue_reduced_nonempty_cusparse_y_updates(
         use_delta && state->use_parallel_delta_cusparse_y;
     if (parallel_delta) {
         build_unscaled_delta_input_kernel<<<
-            numBlocks(state->delta_count), kReducedVectorThreads, 0,
+            HPRLP_NUM_BLOCKS(state->delta_count), kReducedVectorThreads, 0,
             workspace->stream>>>(
             state->parallel_delta_input, state->delta_x_hat,
             state->delta_old_mask, state->delta_lower,
@@ -6835,7 +6835,7 @@ void enqueue_reduced_nonempty_cusparse_y_updates(
     if (state->defer_empty_rows_to_observation) {
         if (state->nonempty_A_count > 0) {
             update_reduced_nonempty_y_from_compact_ax_kernel<<<
-                numBlocks(state->nonempty_A_count),
+                HPRLP_NUM_BLOCKS(state->nonempty_A_count),
                 kReducedVectorThreads, 0, workspace->stream>>>(
                 workspace->y, workspace->AL, workspace->AU,
                 workspace->y_bound_type, workspace->last_y,
@@ -6857,7 +6857,7 @@ void enqueue_reduced_nonempty_cusparse_y_updates(
         }
         if (use_delta && state->signed_delta_only_count > 0) {
             update_reduced_delta_only_y_for_nonempty_cusparse_kernel<<<
-                numBlocks(state->signed_delta_only_count),
+                HPRLP_NUM_BLOCKS(state->signed_delta_only_count),
                 kReducedVectorThreads, 0, workspace->stream>>>(
                 workspace->y, workspace->AL, workspace->AU,
                 workspace->y_bound_type, workspace->last_y,
@@ -6876,7 +6876,7 @@ void enqueue_reduced_nonempty_cusparse_y_updates(
         }
     } else if (workspace->m > 0) {
         update_reduced_full_order_y_from_compact_ax_kernel<<<
-            numBlocks(workspace->m), kReducedVectorThreads, 0,
+            HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
             workspace->stream>>>(
             workspace->y, workspace->AL, workspace->AU,
             workspace->y_bound_type, workspace->last_y,
@@ -7568,7 +7568,7 @@ void profile_reduced_graph(
                 candidate_delta_nonempty_words, 0,
                 word_count * sizeof(std::uint32_t), workspace->stream));
             mark_nonempty_csr_rows_kernel<<<
-                numBlocks(workspace->m), kReducedVectorThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
                 workspace->stream>>>(
                 state->delta_A.rowPtr,
                 candidate_delta_nonempty_words, workspace->m);
@@ -7582,7 +7582,7 @@ void profile_reduced_graph(
                 candidate_delta_only_count_device, 0, sizeof(int),
                 workspace->stream));
             build_delta_only_row_list_kernel<<<
-                numBlocks(workspace->m), kReducedVectorThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
                 workspace->stream>>>(
                 state->A.rowPtr, state->delta_A.rowPtr,
                 candidate_delta_only_rows,
@@ -7606,14 +7606,14 @@ void profile_reduced_graph(
                     &candidate_delta_input, state->delta_count);
             }
             fixed_values_from_mask_kernel<<<
-                numBlocks(state->delta_count), kReducedVectorThreads, 0,
+                HPRLP_NUM_BLOCKS(state->delta_count), kReducedVectorThreads, 0,
                 workspace->stream>>>(
                 candidate_delta_fixed, state->delta_old_mask,
                 state->delta_lower, state->delta_upper,
                 state->delta_count);
             if (candidate_delta_input != nullptr) {
                 build_unscaled_delta_input_kernel<<<
-                    numBlocks(state->delta_count), kReducedVectorThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->delta_count), kReducedVectorThreads, 0,
                     workspace->stream>>>(
                     candidate_delta_input, state->delta_x_hat,
                     state->delta_old_mask, state->delta_lower,
@@ -7663,7 +7663,7 @@ void profile_reduced_graph(
                 "run nonempty profile A SpMVOp");
             if (workspace->m > 0) {
                 update_reduced_full_order_y_from_compact_ax_kernel<<<
-                    numBlocks(workspace->m), kReducedVectorThreads, 0,
+                    HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
                     workspace->stream>>>(
                     workspace->y, workspace->AL, workspace->AU,
                     workspace->y_bound_type, workspace->last_y,
@@ -7689,7 +7689,7 @@ void profile_reduced_graph(
                 &compact_beta, compact_x_hat, compact_ax, compact_ax),
                 "run parallel-delta profile base A SpMVOp");
             build_unscaled_delta_input_kernel<<<
-                numBlocks(state->delta_count), kReducedVectorThreads, 0,
+                HPRLP_NUM_BLOCKS(state->delta_count), kReducedVectorThreads, 0,
                 workspace->stream>>>(
                 parallel_delta_input, state->delta_x_hat,
                 state->delta_old_mask, state->delta_lower,
@@ -7701,7 +7701,7 @@ void profile_reduced_graph(
                 "run parallel-delta profile delta A SpMVOp");
             if (workspace->m > 0) {
                 update_reduced_full_order_y_from_compact_ax_kernel<<<
-                    numBlocks(workspace->m), kReducedVectorThreads, 0,
+                    HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
                     workspace->stream>>>(
                     workspace->y, workspace->AL, workspace->AU,
                     workspace->y_bound_type, workspace->last_y,
@@ -7724,7 +7724,7 @@ void profile_reduced_graph(
         y_nonempty_cusparse_update_ms = time_repeated([&]() {
             if (workspace->m <= 0) return;
             update_reduced_full_order_y_from_compact_ax_kernel<<<
-                numBlocks(workspace->m), kReducedVectorThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->m), kReducedVectorThreads, 0,
                 workspace->stream>>>(
                 workspace->y, workspace->AL, workspace->AU,
                 workspace->y_bound_type, workspace->last_y,
@@ -8372,7 +8372,7 @@ bool hprlp_refresh_reduced_matrix_mask(
             HPRLP_REDUCED_ENTER_RATIO;
     if (entry_ratio_cannot_recover) {
         release_x_bar_mask_kernel<<<
-            numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             state->x_bar_mask, workspace->x_bar,
             workspace->l, workspace->u, workspace->n);
         state->mask_changed = false;
@@ -8396,7 +8396,7 @@ bool hprlp_refresh_reduced_matrix_mask(
         if (state->mask_started &&
             !(recompute_reduced_prebuild_mask() && !state->built)) {
             update_x_bar_mask_kernel<<<
-                numBlocks(workspace->n), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->x_bar_mask, workspace->x_bar,
                 workspace->l, workspace->u, state->changed_device,
@@ -8406,7 +8406,7 @@ bool hprlp_refresh_reduced_matrix_mask(
                 state->delta_old_mask_device, state->built, workspace->n);
         } else {
             initialize_x_bar_mask_kernel<<<
-                numBlocks(workspace->n), numThreads, 0,
+                HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->x_bar_mask, workspace->x_bar,
                 workspace->l, workspace->u, state->changed_device,
@@ -8476,7 +8476,7 @@ void hprlp_maybe_reset_reduced_matrix_mask_on_restart(
 
     if (check_columns) {
         count_current_interior_by_warp_kernel<<<
-            numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             workspace->x_bar, workspace->l, workspace->u,
             state->free_count_by_warp_device, workspace->n);
         CUDA_CHECK(cub::DeviceReduce::Sum(
@@ -8541,7 +8541,7 @@ void hprlp_maybe_reset_reduced_matrix_mask_on_restart(
 
     if (check_rows) {
         count_current_active_rows_by_warp_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             workspace->y_bar, workspace->AL, workspace->AU,
             workspace->y_bound_type,
             state->row_active_count_by_warp_device, workspace->m);
@@ -8645,7 +8645,7 @@ void hprlp_flush_reduced_matrix_state(HPRLP_workspace_gpu *workspace) {
     if (state->mode == HPRLP_reduced_mode::Rows) {
         if (state->row_base_count > 0) {
             scatter_reduced_row_state_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->y, workspace->last_y,
                 state->row_y, state->row_last_y,
@@ -8653,14 +8653,14 @@ void hprlp_flush_reduced_matrix_state(HPRLP_workspace_gpu *workspace) {
         }
         if (state->row_delta_count > 0) {
             scatter_reduced_row_state_kernel<<<
-                numBlocks(state->row_delta_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_delta_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 workspace->y, workspace->last_y,
                 state->row_delta_y, state->row_delta_last_y,
                 state->row_delta_to_original, state->row_delta_count);
         }
         zero_inactive_y_state_kernel<<<
-            numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
             workspace->y, workspace->last_y,
             state->y_bar_mask, workspace->m);
         state->full_dirty = false;
@@ -8669,13 +8669,13 @@ void hprlp_flush_reduced_matrix_state(HPRLP_workspace_gpu *workspace) {
         return;
     }
     if (state->base_count > 0) scatter_reduced_state_kernel<<<
-        numBlocks(state->base_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(state->base_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         workspace->x, workspace->x_bar, workspace->x_hat,
         state->x, state->x_bar, state->x_hat,
         state->free_to_original, state->base_count);
     const int delta_count = state->delta_count;
     if (delta_count > 0) scatter_reduced_state_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         workspace->x, workspace->x_bar, workspace->x_hat,
         state->delta_x, state->delta_x_bar, state->delta_x_hat,
         state->delta_free_to_original, delta_count);
@@ -8696,7 +8696,7 @@ void hprlp_sync_reduced_matrix_state_from_full(
     if (state->mode == HPRLP_reduced_mode::Rows) {
         if (state->row_base_count > 0) {
             gather_reduced_row_state_kernel<<<
-                numBlocks(state->row_base_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_y, state->row_last_y,
                 state->row_lower, state->row_upper,
@@ -8706,7 +8706,7 @@ void hprlp_sync_reduced_matrix_state_from_full(
             if (state->row_use_signed_x ||
                 state->row_use_packed_dictionary_x) {
                 gather_reduced_row_backend_state_kernel<<<
-                    numBlocks(state->row_base_count), numThreads, 0,
+                    HPRLP_NUM_BLOCKS(state->row_base_count), HPRLP_NUM_THREADS, 0,
                     workspace->stream>>>(
                     nullptr, state->row_scaled_y, nullptr,
                     workspace->inverse_row_norm, workspace->y,
@@ -8717,7 +8717,7 @@ void hprlp_sync_reduced_matrix_state_from_full(
         }
         if (state->row_delta_count > 0) {
             gather_reduced_row_state_kernel<<<
-                numBlocks(state->row_delta_count), numThreads, 0,
+                HPRLP_NUM_BLOCKS(state->row_delta_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
                 state->row_delta_y, state->row_delta_last_y,
                 state->row_delta_lower, state->row_delta_upper,
@@ -8731,7 +8731,7 @@ void hprlp_sync_reduced_matrix_state_from_full(
         return;
     }
     if (state->base_count > 0) gather_reduced_state_kernel<<<
-        numBlocks(state->base_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(state->base_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->x, state->x_bar, state->x_hat, state->last_x,
         state->lower, state->upper, state->objective, state->bound_type,
         workspace->x, workspace->x_bar, workspace->x_hat,
@@ -8740,7 +8740,7 @@ void hprlp_sync_reduced_matrix_state_from_full(
         state->base_count);
     const int delta_count = state->delta_count;
     if (delta_count > 0) gather_reduced_state_kernel<<<
-        numBlocks(delta_count), numThreads, 0, workspace->stream>>>(
+        HPRLP_NUM_BLOCKS(delta_count), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         state->delta_x, state->delta_x_bar, state->delta_x_hat,
         state->delta_last_x, state->delta_lower, state->delta_upper,
         state->delta_objective, state->delta_bound_type,

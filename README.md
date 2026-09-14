@@ -1,12 +1,10 @@
-# HPR-LP-C 0.1.3 for NVIDIA B200 and NVIDIA H100
+# HPR-LP-C 0.1.3 for NVIDIA CUDA GPUs
 
-This publication package is the NVIDIA B200 and NVIDIA H100 edition of
-HPR-LP-C 0.1.3, a GPU-accelerated C/CUDA implementation of the
+HPR-LP-C 0.1.3 is a GPU-accelerated C/CUDA implementation of the
 Halpern Peaceman--Rachford method for solving linear programming problems.
-It supports Blackwell B200 compute capability 10.0 (`sm_100`) and
-NVIDIA H100 compute capability 9.0 (`sm_90`).
-The build detects the first visible GPU automatically.
-Both targets require CUDA Toolkit 13.3 or newer in this publication package.
+The build detects the first visible GPU automatically and supports an explicit
+architecture override for cross-builds. CUDA Toolkit 13.3 and newer use
+`cusparseSpMVOp`; earlier toolkits automatically use `cusparseSpMV`.
 
 ## Quick start
 
@@ -61,9 +59,8 @@ Run `make help` to show all build variables and targets.
 The core solver requires:
 
 - Linux on x86-64;
-- an NVIDIA B200 GPU with compute capability 10.0, or
-  an NVIDIA H100 GPU with compute capability 9.0;
-- NVIDIA CUDA Toolkit 13.3 or newer, including `nvcc`, cuBLAS, cuSOLVER,
+- an NVIDIA GPU supported by the selected CUDA Toolkit;
+- an NVIDIA CUDA Toolkit including `nvcc`, cuBLAS, cuSOLVER,
   cuSPARSE, and the CUDA driver development library;
 - GCC/G++ with C++17 support, supported by the selected CUDA Toolkit
   (GCC 9--12 recommended);
@@ -72,9 +69,10 @@ The core solver requires:
 
 ### cuSPARSE backend
 
-The B200 and H100 builds enable NVIDIA's experimental `cusparseSpMVOp` API and use
-`CUSPARSE_SPMVOP_ALG1`. It keeps explicit CSR descriptors for `A` and `A^T`
-and invokes them with `CUSPARSE_OPERATION_NON_TRANSPOSE`.
+CUDA 13.3 and newer enable NVIDIA's experimental `cusparseSpMVOp` API and use
+`CUSPARSE_SPMVOP_ALG1`. Older toolkits use the regular `cusparseSpMV` API with
+`CUSPARSE_SPMV_CSR_ALG2`. Selection happens at compile time from the chosen
+toolkit headers; no user option is required.
 
 See NVIDIA's [cuSPARSE SpMVOp API reference](https://docs.nvidia.com/cuda/cusparse/#cusparsespmvop-experimental)
 and [CUDA Toolkit 13.3 release notes](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/).
@@ -113,15 +111,15 @@ cmake -S . -B build-h100 \
 cmake --build build-h100
 ```
 
-Using a separate directory prevents cached `sm_100` settings and B200 object
-files from being reused in the H100 build. An explicit
+Using a separate directory prevents cached architecture settings and object
+files from being reused for a different GPU. An explicit
 `CMAKE_CUDA_ARCHITECTURES` value always overrides automatic detection.
 
 ### GPU-Presolver-C backend
 
 The source tree vendors `PolyU-IOR/GPU-Presolver-C` under
 `third_party/GPU-Presolver-C`. Make and CMake build this backend by default;
-its source files use C++/CUDA 17 while the HPR-LP-C core retains C++/CUDA 11.
+its source files and the HPR-LP-C core use the C++/CUDA 17 language standard.
 To create a smaller PSLP-only CMake build, set `BUILD_GPU_PRESOLVER=OFF`.
 
 ```bash
@@ -313,7 +311,8 @@ See [`bindings/matlab/README.md`](bindings/matlab/README.md).
 
 - HPR-LP-C has no CPU solver backend.
 - General structured backends are enabled only after lossless runtime checks.
-  Unsupported matrices use the canonical cuSPARSE SpMVOp implementation.
+  Unsupported matrices use the canonical cuSPARSE implementation:
+  `cusparseSpMVOp` on CUDA 13.3+ and `cusparseSpMV` on older toolkits.
 - CUDA virtual-memory allocation is opportunistic; unsupported systems use
   ordinary `cudaMalloc`.
 - Each binary targets the detected or explicitly selected architecture; it is
@@ -335,7 +334,7 @@ make GPU_SM=100
 
 For an H100 build, verify that the selected toolkit supports `compute_90`, then
 use `make GPU_SM=90` instead. On systems with more than one `nvcc`, prefer the
-CUDA 13.3 installation explicitly:
+selected CUDA installation explicitly:
 
 ```bash
 export CUDA_PATH=/usr/local/cuda
@@ -364,7 +363,7 @@ export LD_LIBRARY_PATH="/path/to/HPR-LP-C/lib:${LD_LIBRARY_PATH:-}"
 
 ## Version provenance
 
-This NVIDIA B200 and NVIDIA H100 edition of version 0.1.3 extends the official
+This portable NVIDIA CUDA edition of version 0.1.3 extends the official
 [`PolyU-IOR/HPR-LP-C`](https://github.com/PolyU-IOR/HPR-LP-C) 0.1.2 source at
 commit `358295ca9af3a9f1413174f2f63e5bdf3032c548`. See
 [`CHANGELOG.md`](CHANGELOG.md) for the public changes in this release.

@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.18)
 
 # Select the CUDA architecture before enabling the CUDA language so compiler
 # identification uses the architecture of the first visible GPU. An explicit
-# -DCMAKE_CUDA_ARCHITECTURES=<arch> always wins. If no GPU is visible, retain
-# the B200 publication package's sm_100 fallback default.
+# -DCMAKE_CUDA_ARCHITECTURES=<arch> always wins. If no GPU is visible, leave the
+# value unset and let the selected CUDA compiler choose a supported default.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     execute_process(
         COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
@@ -23,14 +23,14 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         set(CMAKE_CUDA_ARCHITECTURES "${DETECTED_SM}")
         message(STATUS "Detected CUDA architecture: sm_${DETECTED_SM}")
     else()
-        set(CMAKE_CUDA_ARCHITECTURES "100")
-        message(STATUS "No visible GPU detected; using B200 fallback: sm_100")
+        message(STATUS
+            "No visible GPU detected; using the CUDA compiler's default architecture")
     endif()
 endif()
 
 project(HPRLP VERSION 0.1.3 LANGUAGES C CXX CUDA)
 
-# CUDA 13's CCCL (Thrust, CUB, and libcu++) requires C++17.
+# Modern CCCL (Thrust, CUB, and libcu++) requires C++17.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
@@ -46,13 +46,16 @@ if(NOT BUILD_STATIC_LIB AND NOT BUILD_SHARED_LIB)
     message(FATAL_ERROR "At least one of BUILD_STATIC_LIB or BUILD_SHARED_LIB must be ON")
 endif()
 
-# Find the CUDA toolkit required by the NVIDIA B200 release.
+# Find the selected CUDA toolkit. CUDA 13.3 introduced the experimental
+# cusparseSpMVOp API; older toolkits use the supported cusparseSpMV fallback.
 find_package(CUDAToolkit REQUIRED)
-if(CUDAToolkit_VERSION VERSION_LESS 13.3)
-    message(FATAL_ERROR
-        "The HPR-LP-C 0.1.3 B200 release requires CUDA Toolkit 13.3 or newer; found ${CUDAToolkit_VERSION}")
+if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.3)
+    set(HPRLP_CUSPARSE_BACKEND "cusparseSpMVOp ALG1")
+    add_compile_definitions(CUSPARSE_ENABLE_EXPERIMENTAL_API)
+else()
+    set(HPRLP_CUSPARSE_BACKEND "cusparseSpMV CSR ALG2 fallback")
 endif()
-message(STATUS "CUDA ${CUDAToolkit_VERSION}: using cusparseSpMVOp ALG1")
+message(STATUS "CUDA ${CUDAToolkit_VERSION}: using ${HPRLP_CUSPARSE_BACKEND}")
 find_package(ZLIB REQUIRED)
 find_package(HDF5 QUIET COMPONENTS C)
 
@@ -97,8 +100,6 @@ endif()
 # Use -O2 and -w to suppress warnings, add GLIBCXX compatibility flag
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -w -O2 -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -fPIC -D_GLIBCXX_USE_CXX11_ABI=0")
-add_compile_definitions(CUSPARSE_ENABLE_EXPERIMENTAL_API)
-
 # Include directories
 include_directories(
     ${PROJECT_SOURCE_DIR}/include
@@ -212,7 +213,7 @@ if(BUILD_GPU_PRESOLVER)
     list(APPEND HPRLP_LIB_SOURCES src/presolve/gpu_presolver_integration.cpp)
 endif()
 
-# CUDA 13 CUB device primitives used by the reduced-matrix path require C++17.
+# CUB device primitives used by the reduced-matrix path require C++17.
 set_source_files_properties(src/solver/reduced_matrix.cu PROPERTIES
     COMPILE_OPTIONS "$<$<COMPILE_LANGUAGE:CUDA>:--std=c++17>")
 
@@ -424,10 +425,12 @@ install(FILES
 
 # Print configuration summary
 message(STATUS "")
-message(STATUS "HPRLP 0.1.3 B200 Configuration Summary")
+message(STATUS "HPRLP 0.1.3 CUDA Configuration Summary")
 message(STATUS "============================")
 message(STATUS "Version: ${PROJECT_VERSION}")
-message(STATUS "C++ Standard: C++${CMAKE_CXX_STANDARD} (required by CUDA 13 CCCL)")
+message(STATUS "C++ Standard: C++${CMAKE_CXX_STANDARD}")
+message(STATUS "CUDA toolkit: ${CUDAToolkit_VERSION}")
+message(STATUS "cuSPARSE backend: ${HPRLP_CUSPARSE_BACKEND}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 if(CMAKE_CUDA_HOST_COMPILER)
     message(STATUS "CUDA host compiler: ${CMAKE_CUDA_HOST_COMPILER}")

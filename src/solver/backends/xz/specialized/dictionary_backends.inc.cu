@@ -12,7 +12,7 @@ void update_xz_normal_fixed_degree_packed_dictionary_gpu(HPRLP_workspace_gpu *ws
         HPRLP_FLOAT *normal_x_hat_output =
             paired_dictionary_y ? nullptr : ws->x_hat;
         if (!paired_dictionary_y) {
-            vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->y, ws->inverse_row_norm, ws->unit_scaled_y,
                 ws->m, false);
@@ -95,7 +95,7 @@ void update_xz_normal_packed_dictionary_u32_gpu(HPRLP_workspace_gpu *ws) {
         HPRLP_FLOAT *normal_x_hat_output =
             paired_dictionary_y ? nullptr : ws->x_hat;
         if (!paired_dictionary_y) {
-            vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->y, ws->inverse_row_norm, ws->unit_scaled_y,
                 ws->m, false);
@@ -179,7 +179,7 @@ void update_xz_normal_packed_dictionary_u32_u16_gpu(HPRLP_workspace_gpu *ws) {
         HPRLP_FLOAT *normal_x_hat_output =
             paired_dictionary_y ? nullptr : ws->x_hat;
         if (!paired_dictionary_y) {
-            vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->y, ws->inverse_row_norm, ws->unit_scaled_y,
                 ws->m, false);

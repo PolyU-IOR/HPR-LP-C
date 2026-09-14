@@ -4,7 +4,7 @@
 #include <cstdlib>
 
 void set_vector_value_device(HPRLP_FLOAT *x, int n, HPRLP_FLOAT value){
-    set_vector_value_device_kernel<<<numBlocks(n), numThreads>>>(x, n, value);
+    set_vector_value_device_kernel<<<HPRLP_NUM_BLOCKS(n), HPRLP_NUM_THREADS>>>(x, n, value);
 }
 
 void create_zero_vector_device(HPRLP_FLOAT* &x, int n) {
@@ -18,25 +18,25 @@ void create_zero_vector_device_compressible(HPRLP_FLOAT* &x, int n) {
 }
 
 void gen_conceptual_b(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int n) {
-    conceptual_b_kernel<<<numBlocks(n), numThreads>>>(x, y, result, n);
+    conceptual_b_kernel<<<HPRLP_NUM_BLOCKS(n), HPRLP_NUM_THREADS>>>(x, y, result, n);
 }
 
 void vector_dot_product(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int n, bool divide){
-    vector_dot_product_kernel<<<numBlocks(n), numThreads>>>(x, y, result, n, divide);
+    vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(n), HPRLP_NUM_THREADS>>>(x, y, result, n, divide);
 }
 
 
 void CSR_A_row_norm(const sparseMatrix *A, HPRLP_FLOAT *result, int norm) {
-    CSR_A_row_norm_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->colIndex, A->value, result, norm);
+    CSR_A_row_norm_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, result, norm);
 }
 
 void mul_CSR_A_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide) {
-    mul_CSR_A_row_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    mul_CSR_A_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
 }
 
 
 void mul_CSR_AT_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide) {
-    mul_CSR_AT_row_kernel<<<numBlocks(A->row), numThreads>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    mul_CSR_AT_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
 }
 
 void transfer_CSR_matrix(const sparseMatrix *A, sparseMatrix* d_A) {
@@ -81,7 +81,7 @@ void ax(HPRLP_FLOAT a,  HPRLP_FLOAT *x, HPRLP_FLOAT *z, int n, cublasHandle_t cu
 }
 
 void axpy(HPRLP_FLOAT a, const HPRLP_FLOAT* x, const HPRLP_FLOAT* y, HPRLP_FLOAT* z, int len){
-    axpy_kernel<<<numBlocks(len), numThreads>>>(a, x, y, z, len);
+    axpy_kernel<<<HPRLP_NUM_BLOCKS(len), HPRLP_NUM_THREADS>>>(a, x, y, z, len);
 }
 
 HPRLP_FLOAT l2_norm(const HPRLP_FLOAT *x, int n, cublasHandle_t cublasHandle) {
@@ -101,7 +101,7 @@ HPRLP_FLOAT inner_product(const HPRLP_FLOAT *x, const HPRLP_FLOAT *y, int n, cub
 void axpby(HPRLP_FLOAT a, const HPRLP_FLOAT *x, HPRLP_FLOAT b,
            const HPRLP_FLOAT *y, HPRLP_FLOAT *z, int len,
            cudaStream_t stream) {
-    axpby_kernel<<<numBlocks(len), numThreads, 0, stream>>>(a, x, b, y, z, len);
+    axpby_kernel<<<HPRLP_NUM_BLOCKS(len), HPRLP_NUM_THREADS, 0, stream>>>(a, x, b, y, z, len);
 }
 
 

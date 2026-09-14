@@ -64,7 +64,7 @@ void monitor_signed_zero_skip_backend(HPRLP_workspace_gpu *ws) {
     CUDA_CHECK(cudaMemsetAsync(ws->signed_xhat_positive_zero_count, 0,
                                sizeof(unsigned long long), ws->stream));
     count_raw_positive_zero_flags_kernel<<<
-        numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+        HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         ws->unit_scaled_x_hat_nonzero, ws->n,
         ws->signed_xhat_positive_zero_count);
     CUDA_CHECK(cudaMemcpyAsync(ws->signed_xhat_positive_zero_count_host,

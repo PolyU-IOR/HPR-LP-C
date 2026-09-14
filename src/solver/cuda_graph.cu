@@ -88,7 +88,7 @@ void update_unit_coltile_backend_from_zero_density(
         ws->unit_scaled_x_positive_zero_count, 0,
         sizeof(unsigned long long), ws->stream));
     pack_positive_zero_bitset_count_kernel<<<
-        numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+        HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         ws->x_hat, ws->unit_scaled_x_zero_bits,
         ws->unit_scaled_x_positive_zero_count, ws->n);
     unsigned long long positive_zero_count = 0;

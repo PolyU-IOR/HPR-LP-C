@@ -15,7 +15,7 @@ void update_xz_normal_signed_unit_gpu(HPRLP_workspace_gpu *ws) {
         // In a signed/signed pair, the preceding signed Y update produced
         // this cache. Mixed pairs retain the standalone scaling fallback.
         if (!is_signed_y_backend(ws->y_backend)) {
-            vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->y, ws->inverse_row_norm, ws->unit_scaled_y, ws->m,
                 false);
@@ -140,7 +140,7 @@ void update_xz_normal_unit_factorized_gpu(HPRLP_workspace_gpu *ws) {
             ws->y_backend == HPRLPYBackend::UnitColTile &&
             ws->unit_coltile_ready && ws->unit_scaled_x_hat != nullptr;
         if (!paired_unit_coltile) {
-            vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->y, ws->inverse_row_norm, ws->unit_scaled_y, ws->m,
                 false);
@@ -160,11 +160,11 @@ void update_xz_normal_unit_factorized_gpu(HPRLP_workspace_gpu *ws) {
                 ws->unit_AT_col_index_u16};
             hprlp_enqueue_unit_factorized_x_scalar(
                 view, ws->Halpern_params, ws->halpern_factors,
-                ws->uniform_unit_sign, numThreads, ws->stream);
+                ws->uniform_unit_sign, HPRLP_NUM_THREADS, ws->stream);
             return;
         }
         if (ws->all_zero_lower_unbounded_variables && ws->num_AT_rows_short == ws->n) {
-            fused_update_x_z_all_short_unit_nonnegative_kernel<<<numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+            fused_update_x_z_all_short_unit_nonnegative_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
                 ws->x, ws->x_hat, ws->c, ws->last_x, ws->unit_scaled_y,
                 ws->inverse_col_norm, scaled_x_hat_output,
                 ws->AT->rowPtr, ws->unit_AT_col_index_u16,
@@ -183,7 +183,7 @@ void update_xz_normal_unit_factorized_gpu(HPRLP_workspace_gpu *ws) {
                 ws->AT->rowPtr, ws->unit_AT_col_index_u16};
             hprlp_enqueue_unit_factorized_x_scalar(
                 view, ws->Halpern_params, ws->halpern_factors,
-                ws->uniform_unit_sign, numThreads, ws->stream);
+                ws->uniform_unit_sign, HPRLP_NUM_THREADS, ws->stream);
             return;
         }
         if (ws->num_AT_rows_short > 0) {

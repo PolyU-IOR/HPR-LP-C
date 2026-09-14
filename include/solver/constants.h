@@ -193,11 +193,11 @@ constexpr int SPARSE_FORMAT_CSC = 1;
 } // namespace hprlp
 
 // For backwards compatibility, also define macros
-#ifndef numThreads
-#define numThreads hprlp::constants::CUDA_THREADS_PER_BLOCK
+#ifndef HPRLP_NUM_THREADS
+#define HPRLP_NUM_THREADS hprlp::constants::CUDA_THREADS_PER_BLOCK
 #endif
-#ifndef numBlocks
-#define numBlocks(n) hprlp::constants::cuda_num_blocks(n)
+#ifndef HPRLP_NUM_BLOCKS
+#define HPRLP_NUM_BLOCKS(n) hprlp::constants::cuda_num_blocks(n)
 #endif
 
 #endif /* HPRLP_CONSTANTS_H */

@@ -20,9 +20,9 @@ ifeq ($(shell test -x $(NVCC) && echo yes),)
 endif
 
 # Match the core build: detect the first visible GPU, allow GPU_SM to override,
-# and use the B200 sm_100 publication target when detection is unavailable.
+# and let nvcc choose a supported default when detection is unavailable.
 NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' ' | grep -E '^[0-9]+\.[0-9]+$$' | head -n1)
 ifneq ($(DETECTED_CC),)
 	ifeq ($(DETECTED_CC),N/A)
 		DETECTED_SM :=
@@ -33,7 +33,7 @@ endif
 
 ifeq ($(strip $(GPU_SM)),)
 	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH := -arch=sm_100
+		CUDA_ARCH :=
 	else
 		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
 	endif

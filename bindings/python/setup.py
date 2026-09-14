@@ -14,19 +14,20 @@ from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext
 
 
-MIN_CUDA_VERSION = (13, 3)
-MIN_CUDA_VERSION_STR = f"{MIN_CUDA_VERSION[0]}.{MIN_CUDA_VERSION[1]}"
+SPMVOP_MIN_CUDA_VERSION = (13, 3)
 
 
 def _version_tuple(major: int, minor: int) -> int:
     return major * 100 + minor
 
 
-def _is_version_supported(version_tuple):
+def _supports_spmvop(version_tuple):
     if not version_tuple:
         return False
     major, minor, _ = version_tuple
-    return _version_tuple(major, minor) >= _version_tuple(*MIN_CUDA_VERSION)
+    return _version_tuple(major, minor) >= _version_tuple(
+        *SPMVOP_MIN_CUDA_VERSION
+    )
 
 
 def _detect_cuda_version(cuda_path: str):
@@ -86,12 +87,12 @@ def _detect_cuda_version(cuda_path: str):
 
 
 def detect_cuda_architectures():
-    """Return the B200 architecture, unless a controlled build overrides it."""
-    return os.environ.get('CMAKE_CUDA_ARCHITECTURES', '100')
+    """Return an explicit architecture override, or let CMake auto-detect."""
+    return os.environ.get('CMAKE_CUDA_ARCHITECTURES')
 
 
 def find_cuda_home():
-    """Locate a CUDA installation that satisfies the minimum version requirement."""
+    """Locate an installed CUDA toolkit; prefer explicit paths, then newest."""
 
     def add_candidate(path, source, collection):
         if not path:
@@ -121,12 +122,9 @@ def find_cuda_home():
         add_candidate(cuda_dir, 'fallback', candidates)
 
     if not candidates:
-        raise RuntimeError(
-            'CUDA toolkit not found. Install CUDA >= ' + MIN_CUDA_VERSION_STR
-        )
+        raise RuntimeError('CUDA toolkit not found. Install CUDA and nvcc.')
 
-    supported = []
-    incompatible = []
+    available = []
     invalid = []
 
     for candidate in candidates:
@@ -147,39 +145,32 @@ def find_cuda_home():
         candidate['version'] = (major, minor)
         candidate['version_str'] = version_str
 
-        if _is_version_supported(version_tuple):
-            supported.append(candidate)
-        else:
-            candidate['error'] = (
-                f'found CUDA {version_str}, requires >= {MIN_CUDA_VERSION_STR}'
-            )
-            incompatible.append(candidate)
+        candidate['supports_spmvop'] = _supports_spmvop(version_tuple)
+        available.append(candidate)
 
-    if supported:
+    if available:
         # Prefer explicit environment variables first
-        for candidate in supported:
+        for candidate in available:
             if candidate['source'].startswith('env:'):
                 return candidate
 
         # Otherwise pick the newest version
-        supported.sort(
+        available.sort(
             key=lambda item: _version_tuple(*item['version']), reverse=True
         )
-        return supported[0]
+        return available[0]
 
     # Construct helpful error message
     messages = []
-    for bucket in (incompatible, invalid):
-        for candidate in bucket:
-            version_info = candidate.get('version_str') or 'unknown version'
-            messages.append(
-                f"- {candidate['path']} ({version_info}): {candidate.get('error')}"
-            )
+    for candidate in invalid:
+        version_info = candidate.get('version_str') or 'unknown version'
+        messages.append(
+            f"- {candidate['path']} ({version_info}): {candidate.get('error')}"
+        )
 
     detail = '\n'.join(messages) if messages else 'No CUDA toolkits detected.'
     raise RuntimeError(
-        'No compatible CUDA installation found. '
-        f'HPRLP requires CUDA >= {MIN_CUDA_VERSION_STR}.\n' + detail
+        'No usable CUDA installation with nvcc was found.\n' + detail
     )
 
 
@@ -232,7 +223,10 @@ class CMakeBuild(build_ext):
         ]
 
         cuda_architectures = detect_cuda_architectures()
-        cmake_args.append(f'-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}')
+        if cuda_architectures:
+            cmake_args.append(
+                f'-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}'
+            )
 
         # Work out Python include directories. Some bare-metal Python installs lack headers unless
         # python-dev is available, so fail early with a helpful hint instead of a cryptic CMake error.
@@ -284,12 +278,18 @@ class CMakeBuild(build_ext):
             cuda_info = find_cuda_home()
             cuda_home = cuda_info['path']
             cuda_version = cuda_info.get('version_str', 'unknown')
+            cuda_backend = (
+                'cusparseSpMVOp ALG1'
+                if cuda_info.get('supports_spmvop')
+                else 'cusparseSpMV CSR ALG2 fallback'
+            )
             cmake_args.append(f'-DCUDA_TOOLKIT_ROOT_DIR={cuda_home}')
             cmake_args.append(f'-DCUDAToolkit_ROOT={cuda_home}')
             nvcc_path = os.path.join(cuda_home, 'bin', 'nvcc')
             if os.path.isfile(nvcc_path):
                 cmake_args.append(f'-DCMAKE_CUDA_COMPILER={nvcc_path}')
             print(f"✓ Found CUDA {cuda_version} at: {cuda_home}")
+            print(f"✓ Selected cuSPARSE backend: {cuda_backend}")
             # Also set environment variables for consistency
             os.environ['CUDA_HOME'] = cuda_home
             os.environ['CUDA_PATH'] = cuda_home
@@ -331,7 +331,10 @@ class CMakeBuild(build_ext):
 
         # Run CMake configuration
         print(f"Running CMake configuration in {self.build_temp}")
-        print(f"Using CUDA architectures: {cuda_architectures}")
+        print(
+            "Using CUDA architectures: "
+            + (cuda_architectures or "CMake auto-detection/compiler default")
+        )
         
         # Source directory is two levels up (../../)
         source_dir = os.path.abspath(os.path.join(ext.sourcedir, '../..'))

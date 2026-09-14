@@ -153,7 +153,7 @@ void hprlp_initialize_progress_monitor(
     CUDA_CHECK(cudaMemsetAsync(monitor->previous_step_y, 0,
                                ws->m * sizeof(HPRLP_FLOAT), ws->stream));
     const int count = std::max(ws->n, ws->m);
-    baseline_kernel<<<numBlocks(count), numThreads, 0, ws->stream>>>(
+    baseline_kernel<<<HPRLP_NUM_BLOCKS(count), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         ws->n, ws->m, ws->x_bar, ws->y_bar, ws->l, ws->u, ws->AL, ws->AU,
         monitor->previous_x_state, monitor->previous_y_state);
     CUDA_CHECK(cudaMemcpyAsync(monitor->previous_x_bar, ws->x_bar,
@@ -168,9 +168,9 @@ void hprlp_queue_progress_sample(
         5 * sizeof(unsigned long long), ws->stream));
     const int count = std::max(ws->n, ws->m);
     const std::size_t shared_bytes =
-        5 * static_cast<std::size_t>(numThreads) *
+        5 * static_cast<std::size_t>(HPRLP_NUM_THREADS) *
         sizeof(unsigned long long);
-    sample_kernel<<<numBlocks(count), numThreads, shared_bytes, ws->stream>>>(
+    sample_kernel<<<HPRLP_NUM_BLOCKS(count), HPRLP_NUM_THREADS, shared_bytes, ws->stream>>>(
         ws->n, ws->m, ws->x_bar, ws->y_bar, ws->l, ws->u, ws->AL, ws->AU,
         monitor->previous_x_state, monitor->previous_y_state,
         monitor->previous_x_bar, monitor->previous_y_bar,

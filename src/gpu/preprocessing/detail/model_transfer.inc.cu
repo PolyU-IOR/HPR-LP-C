@@ -795,7 +795,7 @@ void build_segmented_plan_device(
             cudaMemcpyDeviceToDevice, stream));
     }
     hprlp_fill_segment_tiles_kernel<<<
-        numBlocks(segmented_count), numThreads, 0, stream>>>(
+        HPRLP_NUM_BLOCKS(segmented_count), HPRLP_NUM_THREADS, 0, stream>>>(
             matrix->rowPtr, *segmented_rows_output, *row_tile_ptr_output,
             segmented_count, tile_entries, *tile_begin_output,
             *tile_end_output);
@@ -869,7 +869,7 @@ void build_bound_types(const HPRLP_FLOAT *lower_dev,
     CUDA_CHECK(hprlp_device_malloc_compressible(
         bound_type_dev, static_cast<std::size_t>(len) * sizeof(std::uint8_t)));
     hprlp_build_bound_types_kernel<<<
-        numBlocks(len), numThreads, 0, stream>>>(
+        HPRLP_NUM_BLOCKS(len), HPRLP_NUM_THREADS, 0, stream>>>(
             lower_dev, upper_dev, len, *bound_type_dev);
     CUDA_CHECK(cudaGetLastError());
 }

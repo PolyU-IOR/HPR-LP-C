@@ -1,8 +1,10 @@
 #include "folding_internal.cuh"
 
 #include <cuda_runtime.h>
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13030
 #ifndef CUSPARSE_ENABLE_EXPERIMENTAL_API
 #define CUSPARSE_ENABLE_EXPERIMENTAL_API
+#endif
 #endif
 #include <cusparse.h>
 

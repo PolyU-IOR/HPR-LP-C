@@ -1,9 +1,8 @@
 ## Makefile to build HPRLP as a library and executables
 
-# Compiler and CUDA architecture for the NVIDIA B200 release
+# Compiler and CUDA architecture
 # Try to auto-detect CUDA installation
 CUDA_PATH ?= $(shell if [ -n "$${CUDA_HOME}" ] && [ -x "$${CUDA_HOME}/bin/nvcc" ]; then echo "$${CUDA_HOME}"; \
-                      elif [ -x "$${HOME}/cuda-13.3/bin/nvcc" ]; then echo "$${HOME}/cuda-13.3"; \
                       elif [ -d /usr/local/cuda ]; then echo /usr/local/cuda; \
                       elif [ -d /opt/cuda ]; then echo /opt/cuda; \
                       elif command -v nvcc >/dev/null 2>&1; then dirname $$(dirname $$(command -v nvcc)); \
@@ -19,24 +18,29 @@ ifeq ($(shell test -x $(NVCC) && echo yes),)
     $(error CUDA compiler not found at $(NVCC). Please install CUDA or set CUDA_PATH variable)
 endif
 
-# B200 support in this release requires the CUDA 13.3 toolchain.
+# CUDA 13.3 added cusparseSpMVOp. Older toolkits compile the regular
+# cusparseSpMV CSR ALG2 backend instead.
 CUDA_RELEASE := $(shell $(NVCC) --version 2>/dev/null | sed -n 's/.*release \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p' | head -n1)
 CUDA_MAJOR := $(word 1,$(CUDA_RELEASE))
 CUDA_MINOR := $(word 2,$(CUDA_RELEASE))
 CUDA_VERSION := $(if $(CUDA_MAJOR),$(CUDA_MAJOR).$(CUDA_MINOR),unknown)
-CUDA_VERSION_OK := $(shell if [ -n "$(CUDA_MAJOR)" ] && \
+CUDA_HAS_SPMVOP := $(shell if [ -n "$(CUDA_MAJOR)" ] && \
 	{ [ "$(CUDA_MAJOR)" -gt 13 ] || \
 	  { [ "$(CUDA_MAJOR)" -eq 13 ] && [ "$(CUDA_MINOR)" -ge 3 ]; }; }; \
 	then echo yes; fi)
-ifeq ($(CUDA_VERSION_OK),)
-    $(error NVIDIA B200 builds require CUDA Toolkit 13.3 or newer; found '$(CUDA_VERSION)')
+ifeq ($(CUDA_HAS_SPMVOP),yes)
+	CUSPARSE_API_FLAGS := -DCUSPARSE_ENABLE_EXPERIMENTAL_API
+	CUSPARSE_BACKEND := cusparseSpMVOp ALG1
+else
+	CUSPARSE_API_FLAGS :=
+	CUSPARSE_BACKEND := cusparseSpMV CSR ALG2 fallback
 endif
 
 # Detect the first visible GPU. An explicit `make GPU_SM=<arch>` always wins;
-# when no GPU is visible (for example in a build container), keep B200 sm_100
-# as this publication package's fallback default.
+# when no GPU is visible (for example in a build container), let nvcc choose
+# an architecture supported by the selected toolkit.
 NVIDIA_SMI := $(shell command -v nvidia-smi 2>/dev/null)
-DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+DETECTED_CC := $(shell test -n "$(NVIDIA_SMI)" && $(NVIDIA_SMI) --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d ' ' | grep -E '^[0-9]+\.[0-9]+$$' | head -n1)
 ifneq ($(DETECTED_CC),)
 	ifeq ($(DETECTED_CC),N/A)
 		DETECTED_SM :=
@@ -47,7 +51,7 @@ endif
 
 ifeq ($(strip $(GPU_SM)),)
 	ifeq ($(strip $(DETECTED_SM)),)
-		CUDA_ARCH := -arch=sm_100
+		CUDA_ARCH :=
 	else
 		CUDA_ARCH := -arch=sm_$(DETECTED_SM)
 	endif
@@ -90,10 +94,10 @@ PREFIX ?= /usr/local
 DESTDIR ?=
 
 # Flags and includes
-# CUDA 13's CCCL (Thrust, CUB, and libcu++) requires C++17.
+# Modern CCCL (Thrust, CUB, and libcu++) requires C++17.
 # Add flags to avoid GLIBCXX_3.4.32 dependency when possible.
-NVCC_FLAGS := -w -O2 --std=c++17 -DCUSPARSE_ENABLE_EXPERIMENTAL_API $(CUDA_ARCH) -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0 -ccbin $(HOST_COMPILER)
-NVCC_CXX17_FLAGS := -w -O2 --std=c++17 -DCUSPARSE_ENABLE_EXPERIMENTAL_API $(CUDA_ARCH) -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0 -ccbin $(HOST_COMPILER)
+NVCC_FLAGS := -w -O2 --std=c++17 $(CUSPARSE_API_FLAGS) $(CUDA_ARCH) -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0 -ccbin $(HOST_COMPILER)
+NVCC_CXX17_FLAGS := -w -O2 --std=c++17 $(CUSPARSE_API_FLAGS) $(CUDA_ARCH) -Xcompiler -fPIC -Xcompiler -D_GLIBCXX_USE_CXX11_ABI=0 -ccbin $(HOST_COMPILER)
 DEPFLAGS := -MMD -MP
 INCLUDES := -I$(INCLUDE_DIR) -I$(INCLUDE_DIR)/cuda_kernels -I$(CUDA_PATH)/include
 PSLP_INCLUDES := -I$(PSLP_DIR)/include/PSLP -I$(PSLP_DIR)/include/core -I$(PSLP_DIR)/include/data_structures -I$(PSLP_DIR)/include/explorers
@@ -139,10 +143,8 @@ endif
 # Libraries - auto-detect lib vs lib64
 CUDA_LIB_DIR := $(shell if [ -d $(CUDA_PATH)/lib64 ]; then echo $(CUDA_PATH)/lib64; \
                          else echo $(CUDA_PATH)/lib; fi)
-CUDA_COMPAT_DIR ?= $(shell for candidate in \
-	$(CUDA_PATH)/compat \
-	$${HOME}/cuda-compat-13.3/usr/local/cuda-13.3/compat; do \
-	if [ -d "$${candidate}" ]; then echo "$${candidate}"; break; fi; done)
+CUDA_COMPAT_DIR ?= $(shell if [ -d $(CUDA_PATH)/compat ]; then \
+	echo $(CUDA_PATH)/compat; fi)
 # Use legacy DT_RPATH so an unrelated CUDA entry in LD_LIBRARY_PATH cannot
 # override the toolkit selected at build time. CUDA 13.3+ builds use the newer
 # experimental SpMVOp symbols; older builds use the cusparseSpMV ALG2 fallback.
@@ -369,7 +371,9 @@ help:
 	@echo "Current configuration:"
 	@echo "  CUDA_PATH:  $(CUDA_PATH)"
 	@echo "  NVCC:       $(NVCC)"
+	@echo "  CUDA:       $(CUDA_VERSION)"
 	@echo "  CUDA_ARCH:  $(CUDA_ARCH)"
+	@echo "  cuSPARSE:   $(CUSPARSE_BACKEND)"
 	@echo "  LIB_DIR:    $(CUDA_LIB_DIR)"
 
 .PHONY: all shared clean install help

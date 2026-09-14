@@ -375,9 +375,9 @@ void prepare_unit_operators(HPRLP_workspace_gpu *workspace, const Scaling_info *
     workspace->factor_row_norm = scaling_info->row_norm;
     workspace->factor_col_norm = scaling_info->col_norm;
 
-    reciprocal_vector_kernel<<<numBlocks(workspace->m), numThreads, 0, workspace->stream>>>(
+    reciprocal_vector_kernel<<<HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         scaling_info->row_norm, workspace->inverse_row_norm, workspace->m);
-    reciprocal_vector_kernel<<<numBlocks(workspace->n), numThreads, 0, workspace->stream>>>(
+    reciprocal_vector_kernel<<<HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS, 0, workspace->stream>>>(
         scaling_info->col_norm, workspace->inverse_col_norm, workspace->n);
 
     if (use_windowed_stencil) {
@@ -388,7 +388,7 @@ void prepare_unit_operators(HPRLP_workspace_gpu *workspace, const Scaling_info *
         CUDA_CHECK(hprlp_device_malloc_compressible(
             &workspace->unit_A_values, nonzeros * sizeof(HPRLP_FLOAT)));
         set_vector_value_device_kernel<<<
-            numBlocks(workspace->A->numElements), numThreads, 0,
+            HPRLP_NUM_BLOCKS(workspace->A->numElements), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(workspace->unit_A_values,
                                  workspace->A->numElements, 1.0);
 

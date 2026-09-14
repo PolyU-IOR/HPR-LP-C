@@ -2,7 +2,7 @@ namespace {
 
 void update_y_normal_structured_gpu(HPRLP_workspace_gpu *ws) {
     HPRLP_structured_operator_gpu *op = ws->structured_operator;
-    vector_dot_product_kernel<<<numBlocks(ws->n), numThreads, 0,
+    vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0,
                                 ws->stream>>>(
         ws->x_hat, ws->inverse_col_norm, ws->unit_scaled_x_hat, ws->n, false);
     structured_update_y_sparse_kernel<<<
@@ -28,7 +28,7 @@ namespace {
 
 void update_y_normal_grid_slack_laplacian_gpu(HPRLP_workspace_gpu *ws) {
         grid_slack_laplacian_update_y_kernel<<<
-            numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+            HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->y, ws->AL, ws->AU, ws->y_bound_type, ws->last_y,
             ws->x_hat, ws->A->value,
             ws->grid_slack_laplacian_shape, ws->Halpern_params,

@@ -19,11 +19,11 @@
 #include "backends/dictionary/dictionary_kernels.cuh"
 #include "backends/structured/structured_kernels.cuh"
 
-#ifndef numThreads
-#define numThreads 256
+#ifndef HPRLP_NUM_THREADS
+#define HPRLP_NUM_THREADS 256
 #endif
-#ifndef numBlocks
-#define numBlocks(n) (((n) + numThreads - 1) / numThreads)
+#ifndef HPRLP_NUM_BLOCKS
+#define HPRLP_NUM_BLOCKS(n) (((n) + HPRLP_NUM_THREADS - 1) / HPRLP_NUM_THREADS)
 #endif
 
 #endif

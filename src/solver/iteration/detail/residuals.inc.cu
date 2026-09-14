@@ -6,7 +6,7 @@ void residual_compute_Rp_cusparse(HPRLP_workspace_gpu *ws, Scaling_info *scaling
         ws->spmv_A->x_bar_cusparseDescr, ws->spmv_A->Ax_cusparseDescr,
         ws->spmv_A->Ax_cusparseDescr));
 
-    residual_compute_Rp_kernel<<<numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+    residual_compute_Rp_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         scaling->row_norm, ws->Rp, ws->AL, ws->AU, ws->Ax, ws->m);
 }
 
@@ -20,7 +20,7 @@ void residual_compute_Rd_cusparse(HPRLP_workspace_gpu *ws, Scaling_info *scaling
         ws->spmv_AT->ATy_cusparseDescr,
         ws->spmv_AT->ATy_cusparseDescr));
 
-    residual_compute_Rd_kernel<<<numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+    residual_compute_Rd_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         scaling->col_norm, ws->ATy, ws->z_bar, ws->c, ws->Rd, ws->n);
 }
 
@@ -65,7 +65,7 @@ void compute_residuals(HPRLP_workspace_gpu *ws, LP_info_gpu *lp, Scaling_info *s
 
     if (iter == 0) {
         residual_compute_lu_kernel<<<
-            numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+            HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
                 scaling->col_norm, ws->x_temp, ws->x_bar, ws->l, ws->u,
                 ws->n);
     }

@@ -10,7 +10,7 @@ void update_y_normal_signed_unit_gpu(HPRLP_workspace_gpu *ws) {
         // In a signed/signed pair, the preceding signed X update produced
         // this cache. Mixed pairs retain the standalone scaling fallback.
         if (!is_signed_x_backend(ws->x_backend)) {
-            vector_dot_product_kernel<<<numBlocks(ws->n), numThreads, 0,
+            vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0,
                                         ws->stream>>>(
                 ws->x_hat, ws->inverse_col_norm, ws->unit_scaled_x_hat,
                 ws->n, false);
@@ -355,7 +355,7 @@ namespace {
 
 void update_y_normal_unit_active_scatter_gpu(HPRLP_workspace_gpu *ws) {
         update_y_normal_unit_kernel<<<
-            numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+            HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->y, ws->AL, ws->AU, ws->Ax,
             ws->inverse_row_norm, ws->last_y, ws->Halpern_params,
             ws->halpern_factors, ws->uniform_unit_sign, ws->m);
@@ -368,7 +368,7 @@ void update_y_normal_unit_coltile_gpu(HPRLP_workspace_gpu *ws) {
         HPRLP_unit_coltile_gpu *op = ws->unit_coltile;
         if (ws->y_backend == HPRLPYBackend::UnitColTileZeroBitset) {
             vector_dot_product_zero_bitset_kernel<<<
-                numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+                HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
                 ws->x_hat, ws->inverse_col_norm,
                 ws->unit_scaled_x_hat, ws->unit_scaled_x_zero_bits,
                 ws->n);
@@ -385,7 +385,7 @@ void update_y_normal_unit_coltile_gpu(HPRLP_workspace_gpu *ws) {
                 ws->x_backend == HPRLPXBackend::UnitFactorized &&
                 ws->unit_operator_x_ready;
             if (!paired_unit_x) {
-                vector_dot_product_kernel<<<numBlocks(ws->n), numThreads, 0,
+                vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0,
                                             ws->stream>>>(
                     ws->x_hat, ws->inverse_col_norm,
                     ws->unit_scaled_x_hat, ws->n, false);
@@ -406,7 +406,7 @@ void update_y_normal_unit_coltile_gpu(HPRLP_workspace_gpu *ws) {
 namespace {
 
 void update_y_normal_unit_factorized_gpu(HPRLP_workspace_gpu *ws) {
-        vector_dot_product_kernel<<<numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+        vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->x_hat, ws->inverse_col_norm, ws->unit_scaled_x_hat, ws->n, false);
         CUSPARSE_CHECK(hprlp_run_spmvop(
             ws->spmv_A->cusparseHandle, ws->spmv_A->unit_operation,
@@ -414,7 +414,7 @@ void update_y_normal_unit_factorized_gpu(HPRLP_workspace_gpu *ws) {
             ws->spmv_A->unit_x_hat_cusparseDescr,
             ws->spmv_A->Ax_cusparseDescr,
             ws->spmv_A->Ax_cusparseDescr));
-        update_y_normal_unit_kernel<<<numBlocks(ws->m), numThreads, 0, ws->stream>>>(
+        update_y_normal_unit_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->y, ws->AL, ws->AU, ws->Ax, ws->inverse_row_norm,
             ws->last_y, ws->Halpern_params, ws->halpern_factors,
             ws->uniform_unit_sign, ws->m);

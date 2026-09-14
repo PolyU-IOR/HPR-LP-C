@@ -18,8 +18,8 @@ Thank you for your interest in contributing to HPR-LP-C. This document provides 
 ## Development Setup
 
 ### Prerequisites
-- NVIDIA B200 GPU (Compute Capability 10.0)
-- CUDA Toolkit 13.3 or newer
+- NVIDIA GPU supported by the selected CUDA Toolkit
+- CUDA Toolkit with `nvcc`, cuBLAS, cuSOLVER, and cuSPARSE
 - GCC 9-12 with C++17 support
 - GNU Make or CMake 3.18 or newer
 - zlib development headers

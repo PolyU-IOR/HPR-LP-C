@@ -35,16 +35,16 @@ void refresh_paired_scaled_cache(HPRLP_workspace_gpu *ws) {
         ws->unit_scaled_x_hat == nullptr) {
         return;
     }
-    vector_dot_product_kernel<<<numBlocks(ws->m), numThreads, 0,
+    vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->m), HPRLP_NUM_THREADS, 0,
                                 ws->stream>>>(
         ws->y, ws->inverse_row_norm, ws->unit_scaled_y, ws->m, false);
-    vector_dot_product_kernel<<<numBlocks(ws->n), numThreads, 0,
+    vector_dot_product_kernel<<<HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0,
                                 ws->stream>>>(
         ws->x_hat, ws->inverse_col_norm, ws->unit_scaled_x_hat, ws->n,
         false);
     if (ws->unit_scaled_x_hat_nonzero != nullptr) {
         mark_raw_positive_zero_flags_kernel<<<
-            numBlocks(ws->n), numThreads, 0, ws->stream>>>(
+            HPRLP_NUM_BLOCKS(ws->n), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->unit_scaled_x_hat, ws->unit_scaled_x_hat_nonzero, ws->n);
     }
 }

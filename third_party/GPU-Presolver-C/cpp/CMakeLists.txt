@@ -3,9 +3,12 @@ cmake_minimum_required(VERSION 3.24)
 project(GPUPresolverCpp LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit REQUIRED)
-if(CUDAToolkit_VERSION VERSION_LESS 13.3)
-  message(FATAL_ERROR
-    "GPU-Presolver-C requires CUDA Toolkit 13.3 or newer for cusparseSpMVOp ALG1")
+if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.3)
+  message(STATUS
+    "GPU-Presolver-C: using cusparseSpMVOp ALG1 with CUDA ${CUDAToolkit_VERSION}")
+else()
+  message(STATUS
+    "GPU-Presolver-C: using cusparseSpMV CSR ALG2 fallback with CUDA ${CUDAToolkit_VERSION}")
 endif()
 
 if(NOT DEFINED GPUPRESOLVER_CUSPARSE_LINK_TARGET OR
@@ -41,10 +44,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES "90-real")
-endif()
-
 enable_testing()
 
 add_library(gpu_presolver_core
@@ -79,9 +78,11 @@ target_include_directories(gpu_presolver_core PUBLIC
   ${CUDAToolkit_INCLUDE_DIRS}
 )
 
-target_compile_definitions(gpu_presolver_core PUBLIC
-  CUSPARSE_ENABLE_EXPERIMENTAL_API
-)
+if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.3)
+  target_compile_definitions(gpu_presolver_core PUBLIC
+    CUSPARSE_ENABLE_EXPERIMENTAL_API
+  )
+endif()
 
 target_link_libraries(gpu_presolver_core PUBLIC
   ${GPUPRESOLVER_CUSPARSE_LINK_TARGET}

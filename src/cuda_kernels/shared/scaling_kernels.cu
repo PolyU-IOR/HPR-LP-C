@@ -19,7 +19,7 @@ __global__ void CSR_A_row_norm_kernel(int m, int *rowPtr, int *colIndex, HPRLP_F
     const bool cooperative = row < m &&
         end - start > kScalingCooperativeRowThreshold;
 
-    // The launch contract uses numThreads == 256.  Each warp owns its
+    // The launch contract uses HPRLP_NUM_THREADS == 256.  Each warp owns its
     // corresponding 32-value slice of this shared tile.
     __shared__ HPRLP_FLOAT ordered_values[kScalingThreadsPerBlock];
     unsigned cooperative_rows =

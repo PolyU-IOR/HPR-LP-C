@@ -322,7 +322,7 @@ __global__ void do_batched_restart_kernel(HPRLP_FLOAT *X,
     }
 }
 
-int blocks(int n) { return (n + numThreads - 1) / numThreads; }
+int blocks(int n) { return (n + HPRLP_NUM_THREADS - 1) / HPRLP_NUM_THREADS; }
 
 void cuda_malloc_zero(HPRLP_FLOAT **ptr, int len) {
     CUDA_CHECK(cudaMalloc(ptr, static_cast<size_t>(len) * sizeof(HPRLP_FLOAT)));
@@ -581,15 +581,15 @@ void compute_residuals(BatchedWorkspace *ws,
                        BatchedResidualHost *residuals,
                        int iter) {
     spmm_AT(ws, ws->spmm.Y_bar_descr);
-    compute_batched_Rd_kernel<<<blocks(ws->n * ws->B), numThreads, 0, ws->stream>>>(
+    compute_batched_Rd_kernel<<<blocks(ws->n * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         scaling.col_norm, ws->ATY, ws->Z_bar, batch.C, ws->RD, ws->n, ws->n * ws->B);
 
     spmm_A(ws, ws->spmm.X_bar_descr);
-    compute_batched_Rp_kernel<<<blocks(ws->m * ws->B), numThreads, 0, ws->stream>>>(
+    compute_batched_Rp_kernel<<<blocks(ws->m * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         scaling.row_norm, ws->RP, batch.AL, batch.AU, ws->AX, ws->m, ws->m * ws->B);
 
     if (iter == 0) {
-        compute_batched_lu_violation_kernel<<<blocks(ws->n * ws->B), numThreads, 0, ws->stream>>>(
+        compute_batched_lu_violation_kernel<<<blocks(ws->n * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             scaling.col_norm, ws->DX, ws->X_bar, batch.L, batch.U, ws->n, ws->n * ws->B);
     }
 
@@ -653,7 +653,7 @@ void compute_restart_movement_norms(BatchedWorkspace *ws,
                                     std::vector<HPRLP_FLOAT> *primal_move,
                                     std::vector<HPRLP_FLOAT> *dual_move) {
     int total = std::max(ws->n * ws->B, ws->m * ws->B);
-    batched_restart_movement_kernel<<<blocks(total), numThreads, 0, ws->stream>>>(
+    batched_restart_movement_kernel<<<blocks(total), HPRLP_NUM_THREADS, 0, ws->stream>>>(
         ws->DX, ws->DY, ws->X_bar, ws->Y_bar, ws->last_X, ws->last_Y, ws->n, ws->m, ws->B);
     CUDA_CHECK(cudaStreamSynchronize(ws->stream));
     primal_move->assign(ws->B, 0.0);
@@ -747,7 +747,7 @@ bool do_restart(BatchedRestartHost *restart, BatchedWorkspace *ws, const std::ve
     CUDA_CHECK(cudaMemcpyAsync(ws->restart_flags, restart->restart_flags.data(), ws->B * sizeof(unsigned char), cudaMemcpyHostToDevice, ws->stream));
     if (any) {
         int total = std::max(ws->n * ws->B, ws->m * ws->B);
-        do_batched_restart_kernel<<<blocks(total), numThreads, 0, ws->stream>>>(
+        do_batched_restart_kernel<<<blocks(total), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->X, ws->Y, ws->last_X, ws->last_Y, ws->X_bar, ws->Y_bar,
             ws->restart_flags, ws->n, ws->m, ws->B);
         for (int k = 0; k < ws->B; ++k) {
@@ -764,12 +764,12 @@ bool do_restart(BatchedRestartHost *restart, BatchedWorkspace *ws, const std::ve
 void update_x_z(BatchedWorkspace *ws, const BatchedLPDevice &batch, bool check) {
     spmm_AT(ws, ws->spmm.Y_descr);
     if (check) {
-        update_x_z_check_batched_kernel<<<blocks(ws->n * ws->B), numThreads, 0, ws->stream>>>(
+        update_x_z_check_batched_kernel<<<blocks(ws->n * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->DX, ws->X, ws->Z_bar, ws->X_bar, ws->X_hat, batch.L, batch.U, ws->ATY,
             batch.C, ws->last_X, ws->sigma, ws->halpern_fact1, ws->halpern_fact2,
             ws->active, ws->n, ws->n * ws->B);
     } else {
-        update_x_z_normal_batched_kernel<<<blocks(ws->n * ws->B), numThreads, 0, ws->stream>>>(
+        update_x_z_normal_batched_kernel<<<blocks(ws->n * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->X, ws->X_hat, batch.L, batch.U, ws->ATY, batch.C, ws->last_X,
             ws->sigma, ws->halpern_fact1, ws->halpern_fact2, ws->active, ws->n, ws->n * ws->B);
     }
@@ -778,12 +778,12 @@ void update_x_z(BatchedWorkspace *ws, const BatchedLPDevice &batch, bool check) 
 void update_y(BatchedWorkspace *ws, const BatchedLPDevice &batch, bool check) {
     spmm_A(ws, ws->spmm.X_hat_descr);
     if (check) {
-        update_y_check_batched_kernel<<<blocks(ws->m * ws->B), numThreads, 0, ws->stream>>>(
+        update_y_check_batched_kernel<<<blocks(ws->m * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->DY, ws->Y_bar, ws->Y_hat, ws->Y, ws->Y_obj, batch.AL, batch.AU, ws->AX,
             ws->last_Y, ws->sigma, ws->halpern_fact1, ws->halpern_fact2, ws->active,
             ws->lambda_max, ws->m, ws->m * ws->B);
     } else {
-        update_y_normal_batched_kernel<<<blocks(ws->m * ws->B), numThreads, 0, ws->stream>>>(
+        update_y_normal_batched_kernel<<<blocks(ws->m * ws->B), HPRLP_NUM_THREADS, 0, ws->stream>>>(
             ws->Y, batch.AL, batch.AU, ws->AX, ws->last_Y, ws->sigma,
             ws->halpern_fact1, ws->halpern_fact2, ws->active, ws->lambda_max, ws->m, ws->m * ws->B);
     }

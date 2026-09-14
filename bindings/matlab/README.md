@@ -1,7 +1,7 @@
 # HPR-LP-C MATLAB Interface
 
-MATLAB interface for the NVIDIA B200 edition of HPR-LP-C 0.1.3. This package
-targets `sm_100` and requires CUDA Toolkit 13.3 or newer.
+MATLAB interface for HPR-LP-C 0.1.3. The build detects the GPU architecture;
+CUDA 13.3+ uses `cusparseSpMVOp`, while older toolkits use `cusparseSpMV`.
 
 ---
 

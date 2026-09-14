@@ -29,7 +29,7 @@ __global__ void curtis_reid_log_update_kernel(int m,
     // row assignments.  The lanes preload one CSR-order tile, while lane zero
     // performs every addition in the original left-to-right order.  This
     // exposes memory-level parallelism without reassociating the reduction.
-    __shared__ HPRLP_FLOAT ordered_terms[numThreads];
+    __shared__ HPRLP_FLOAT ordered_terms[HPRLP_NUM_THREADS];
     unsigned cooperative_rows =
         __ballot_sync(kScalingFullWarpMask, cooperative);
     while (cooperative_rows != 0u) {
@@ -291,16 +291,16 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     // accumulation order, row/column update order, and scaling applications
     // remain unchanged.
     if (use_log_cache) {
-        curtis_reid_neg_log_abs_kernel<<<numBlocks(a_nonzeros), numThreads>>>(
+        curtis_reid_neg_log_abs_kernel<<<HPRLP_NUM_BLOCKS(a_nonzeros), HPRLP_NUM_THREADS>>>(
             a_nonzeros, lp_info_gpu->A->value, neg_log_abs_a);
-        curtis_reid_neg_log_abs_kernel<<<numBlocks(at_nonzeros), numThreads>>>(
+        curtis_reid_neg_log_abs_kernel<<<HPRLP_NUM_BLOCKS(at_nonzeros), HPRLP_NUM_THREADS>>>(
             at_nonzeros, lp_info_gpu->AT->value, neg_log_abs_at);
     }
 
     for (int i = 0; i < 20; ++i) {
         if (use_log_cache) {
             curtis_reid_log_update_kernel<<<
-                numBlocks(lp_info_gpu->m), numThreads>>>(
+                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
                 lp_info_gpu->A->row,
                 lp_info_gpu->A->rowPtr,
                 lp_info_gpu->A->colIndex,
@@ -310,7 +310,7 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
                 tempNorm1);
 
             curtis_reid_log_update_kernel<<<
-                numBlocks(lp_info_gpu->n), numThreads>>>(
+                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
                 lp_info_gpu->AT->row,
                 lp_info_gpu->AT->rowPtr,
                 lp_info_gpu->AT->colIndex,
@@ -320,7 +320,7 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
                 tempNorm2);
         } else {
             curtis_reid_log_update_kernel<<<
-                numBlocks(lp_info_gpu->m), numThreads>>>(
+                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
                 lp_info_gpu->A->row,
                 lp_info_gpu->A->rowPtr,
                 lp_info_gpu->A->colIndex,
@@ -330,7 +330,7 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
                 tempNorm1);
 
             curtis_reid_log_update_kernel<<<
-                numBlocks(lp_info_gpu->n), numThreads>>>(
+                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
                 lp_info_gpu->AT->row,
                 lp_info_gpu->AT->rowPtr,
                 lp_info_gpu->AT->colIndex,
@@ -350,8 +350,8 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
         return;
     }
 
-    exp_clamp_kernel<<<numBlocks(lp_info_gpu->m), numThreads>>>(tempNorm1, lp_info_gpu->m);
-    exp_clamp_kernel<<<numBlocks(lp_info_gpu->n), numThreads>>>(tempNorm2, lp_info_gpu->n);
+    exp_clamp_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(tempNorm1, lp_info_gpu->m);
+    exp_clamp_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(tempNorm2, lp_info_gpu->n);
 
     vector_dot_product(rowNormA, tempNorm1, rowNormA, lp_info_gpu->m, true);
     vector_dot_product(colNormA, tempNorm2, colNormA, lp_info_gpu->n, true);
@@ -359,10 +359,10 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     // Match Julia's single expression `value *= row_scale * col_scale`.
     // Applying the two factors in separate kernels changes rounding before the
     // first solver iteration on very large models.
-    apply_curtis_reid_csr_kernel<<<numBlocks(lp_info_gpu->m), numThreads>>>(
+    apply_curtis_reid_csr_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
         lp_info_gpu->m, lp_info_gpu->A->rowPtr, lp_info_gpu->A->colIndex,
         lp_info_gpu->A->value, tempNorm1, tempNorm2);
-    apply_curtis_reid_csr_kernel<<<numBlocks(lp_info_gpu->n), numThreads>>>(
+    apply_curtis_reid_csr_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
         lp_info_gpu->n, lp_info_gpu->AT->rowPtr, lp_info_gpu->AT->colIndex,
         lp_info_gpu->AT->value, tempNorm2, tempNorm1);
 

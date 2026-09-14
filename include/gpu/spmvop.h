@@ -1,19 +1,24 @@
 #ifndef HPRLP_GPU_SPMVOP_H
 #define HPRLP_GPU_SPMVOP_H
 
+#include <cuda_runtime_api.h>
+
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 13030
 #ifndef CUSPARSE_ENABLE_EXPERIMENTAL_API
 #define CUSPARSE_ENABLE_EXPERIMENTAL_API
 #endif
+#endif
 
-#include <cuda_runtime_api.h>
 #include <cusparse.h>
 
 #include <cstddef>
 
 #if defined(CUDART_VERSION) && CUDART_VERSION >= 13030
 #define HPRLP_HAS_CUSPARSE_SPMVOP 1
+#define HPRLP_CUSPARSE_BACKEND_NAME "cusparseSpMVOp ALG1"
 #else
 #define HPRLP_HAS_CUSPARSE_SPMVOP 0
+#define HPRLP_CUSPARSE_BACKEND_NAME "cusparseSpMV CSR ALG2"
 #endif
 
 struct HPRLP_spmvop {

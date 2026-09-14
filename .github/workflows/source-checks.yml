@@ -38,10 +38,10 @@ jobs:
         run: |
           test ! -e bindings/julia/package/Manifest.toml
           test ! -d optimization_report
-          grep -Fq 'CUDA_ARCH := -arch=sm_100' Makefile
-          grep -Fq 'set(CMAKE_CUDA_ARCHITECTURES "100")' CMakeLists.txt
-          grep -Fq 'MIN_CUDA_VERSION = (13, 3)' bindings/python/setup.py
-          grep -Fq '#define HPRLP_CUDA_ARCHITECTURE "sm_100"' include/api/version.h
+          grep -Fq 'CUDA_HAS_SPMVOP :=' Makefile
+          grep -Fq 'CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.3' CMakeLists.txt
+          grep -Fq 'SPMVOP_MIN_CUDA_VERSION = (13, 3)' bindings/python/setup.py
+          grep -Fq '#define HPRLP_CUDA_ARCHITECTURE "auto"' include/api/version.h
           if grep -R -n -E 'HPR-LP-C-private|/home/[^ ]+|/Users/[^ ]+' \
               --exclude-dir=.git --exclude-dir=.github \
               --exclude-dir=third_party .; then
