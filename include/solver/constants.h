@@ -131,6 +131,27 @@ constexpr double DEFAULT_TIME_LIMIT = 3600.0;
 constexpr int DEFAULT_CHECK_INTERVAL = 150;
 
 // ============================================================================
+// Reduced Matrix and Compressible Memory Defaults
+// ============================================================================
+
+/**
+ * @brief Native defaults used when the corresponding HPRLP_* environment
+ * variable is not set
+ */
+constexpr bool DEFAULT_ENABLE_COMPRESSIBLE_MEMORY = true;
+constexpr bool DEFAULT_USE_ROW_REDUCTION = true;
+constexpr bool DEFAULT_USE_ROW_COMPRESSED_AUTOTUNE = true;
+constexpr bool DEFAULT_USE_REDUCED_COMPRESSED_AUTOTUNE = true;
+constexpr bool DEFAULT_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK = true;
+constexpr bool DEFAULT_USE_REDUCED_NONEMPTY_CUSPARSE = true;
+constexpr bool DEFAULT_REDUCED_RESET_MASK_ON_RESTART = true;
+constexpr double DEFAULT_REDUCED_RESTART_MASK_MIN_RECOVERY = 0.25;
+constexpr long long DEFAULT_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS =
+    25000;
+constexpr long long DEFAULT_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS =
+    95000;
+
+// ============================================================================
 // Memory and Data Structure Parameters
 // ============================================================================
 

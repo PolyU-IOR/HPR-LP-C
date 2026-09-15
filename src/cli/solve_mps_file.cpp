@@ -25,29 +25,6 @@ inline bool file_exists(const std::string& path) {
     return (stat(path.c_str(), &buffer) == 0);
 }
 
-static void apply_default_runtime_environment() {
-    static const struct {
-        const char* name;
-        const char* value;
-    } defaults[] = {
-        {"HPRLP_ENABLE_COMPRESSIBLE_MEMORY", "1"},
-        {"HPRLP_USE_ROW_REDUCTION", "1"},
-        {"HPRLP_USE_ROW_COMPRESSED_AUTOTUNE", "1"},
-        {"HPRLP_USE_REDUCED_COMPRESSED_AUTOTUNE", "1"},
-        {"HPRLP_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK", "1"},
-        {"HPRLP_USE_REDUCED_NONEMPTY_CUSPARSE", "1"},
-        {"HPRLP_REDUCED_RESET_MASK_ON_RESTART", "1"},
-        {"HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY", "0.25"},
-        {"HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS", "25000"},
-        {"HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS", "95000"},
-    };
-    for (const auto& setting : defaults) {
-        if (std::getenv(setting.name) == nullptr) {
-            ::setenv(setting.name, setting.value, 0);
-        }
-    }
-}
-
 static void print_usage(const char* prog) {
     std::cout << "Usage: " << prog << " -i <input.mps|input.mps.gz|input.h5> [options]\n"
               << "\nOptions:\n"
@@ -285,7 +262,6 @@ static LP_info_cpu* create_model_from_hdf5_file(const std::string& path) {
 #endif
 
 int main(int argc, char** argv) {
-    apply_default_runtime_environment();
     std::string input_path;
     bool input_provided = false;
     HPRLP_parameters param; // defaults from structs.h

@@ -20,6 +20,10 @@ All notable public changes to HPR-LP-C are recorded here. The project follows
 - Changed the Python dataset runner to collect complete timing, convergence,
   and reduced-matrix statistics from native result objects in persistent
   per-GPU worker processes instead of parsing filtered console output.
+- Grouped the reduced-matrix tuning and compressible-memory defaults in
+  `include/solver/constants.h`. The CLI, Python runner, Julia runner, and
+  allocator now share these defaults while continuing to honor explicit
+  `HPRLP_*` environment overrides.
 - Renamed generic CUDA launch macros that collided with CUDA 13.0
   `cooperative_groups` internals.
 

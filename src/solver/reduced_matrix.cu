@@ -10,6 +10,7 @@
 #include "solver/backends/signed_unit_launcher.cuh"
 #include "solver/backends/packed_dictionary_launcher.cuh"
 #include "solver/backends/unit_factorized_launcher.cuh"
+#include "solver/constants.h"
 #include "solver/iteration/main_iterate.h"
 
 #include <cuda_runtime.h>
@@ -37,6 +38,8 @@ using hprlp::cuda_kernels::detail::project_x_with_bounds;
 using hprlp::cuda_kernels::detail::project_y_delta;
 
 namespace {
+
+namespace constants = hprlp::constants;
 
 constexpr int kReducedVectorThreads = 512;
 constexpr int kReducedYThreads = 1024;
@@ -136,7 +139,9 @@ bool reduced_restart_mask_reset_enabled() {
     static const bool enabled = []() {
         const char *value =
             std::getenv("HPRLP_REDUCED_RESET_MASK_ON_RESTART");
-        if (value == nullptr) return false;
+        if (value == nullptr) {
+            return constants::DEFAULT_REDUCED_RESET_MASK_ON_RESTART;
+        }
         const std::string setting(value);
         const bool result = setting == "1" || setting == "true" ||
             setting == "TRUE" || setting == "yes" || setting == "YES";
@@ -151,10 +156,11 @@ bool reduced_restart_mask_reset_enabled() {
 
 HPRLP_FLOAT reduced_restart_mask_min_recovery() {
     static const HPRLP_FLOAT recovery = []() {
-        constexpr HPRLP_FLOAT default_recovery = 0.25;
         const char *value =
             std::getenv("HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY");
-        if (value == nullptr || *value == '\0') return default_recovery;
+        if (value == nullptr || *value == '\0') {
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_RECOVERY;
+        }
         char *end = nullptr;
         const double parsed = std::strtod(value, &end);
         if (end == value || *end != '\0' || !std::isfinite(parsed) ||
@@ -162,8 +168,10 @@ HPRLP_FLOAT reduced_restart_mask_min_recovery() {
             std::cerr
                 << "Ignoring invalid "
                    "HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY='"
-                << value << "'; using " << default_recovery << std::endl;
-            return default_recovery;
+                << value << "'; using "
+                << constants::DEFAULT_REDUCED_RESTART_MASK_MIN_RECOVERY
+                << std::endl;
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_RECOVERY;
         }
         return static_cast<HPRLP_FLOAT>(parsed);
     }();
@@ -172,11 +180,10 @@ HPRLP_FLOAT reduced_restart_mask_min_recovery() {
 
 long long reduced_restart_mask_min_saved_columns() {
     static const long long min_saved_columns = []() {
-        constexpr long long default_min_saved_columns = 25000;
         const char *value = std::getenv(
             "HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS");
         if (value == nullptr || *value == '\0') {
-            return default_min_saved_columns;
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS;
         }
         char *end = nullptr;
         const long long parsed = std::strtoll(value, &end, 10);
@@ -184,9 +191,10 @@ long long reduced_restart_mask_min_saved_columns() {
             std::cerr
                 << "Ignoring invalid "
                    "HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS='"
-                << value << "'; using " << default_min_saved_columns
+                << value << "'; using "
+                << constants::DEFAULT_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS
                 << std::endl;
-            return default_min_saved_columns;
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS;
         }
         return parsed;
     }();
@@ -195,11 +203,10 @@ long long reduced_restart_mask_min_saved_columns() {
 
 long long reduced_restart_mask_min_current_columns() {
     static const long long min_current_columns = []() {
-        constexpr long long default_min_current_columns = 95000;
         const char *value = std::getenv(
             "HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS");
         if (value == nullptr || *value == '\0') {
-            return default_min_current_columns;
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS;
         }
         char *end = nullptr;
         const long long parsed = std::strtoll(value, &end, 10);
@@ -207,9 +214,10 @@ long long reduced_restart_mask_min_current_columns() {
             std::cerr
                 << "Ignoring invalid "
                    "HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS='"
-                << value << "'; using " << default_min_current_columns
+                << value << "'; using "
+                << constants::DEFAULT_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS
                 << std::endl;
-            return default_min_current_columns;
+            return constants::DEFAULT_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS;
         }
         return parsed;
     }();
@@ -222,7 +230,7 @@ bool reduced_rows_enabled() {
         if (value == nullptr || *value == '\0') {
             std::cout << "Adaptive row/column reduction: enabled"
                       << std::endl;
-            return true;
+            return constants::DEFAULT_USE_ROW_REDUCTION;
         }
         const std::string setting(value);
         if (setting == "0" || setting == "false" || setting == "FALSE" ||
@@ -241,7 +249,7 @@ bool reduced_rows_enabled() {
         std::cerr << "Ignoring invalid HPRLP_USE_ROW_REDUCTION='" << value
                   << "'; adaptive row/column reduction remains enabled"
                   << std::endl;
-        return true;
+        return constants::DEFAULT_USE_ROW_REDUCTION;
     }();
     return enabled;
 }
@@ -301,7 +309,9 @@ bool reduced_row_backend_profile_enabled() {
 bool reduced_row_compressed_autotune_enabled() {
     const char *value =
         std::getenv("HPRLP_USE_ROW_COMPRESSED_AUTOTUNE");
-    if (value == nullptr) return false;
+    if (value == nullptr) {
+        return constants::DEFAULT_USE_ROW_COMPRESSED_AUTOTUNE;
+    }
     const std::string setting(value);
     return setting != "0" && setting != "false" && setting != "FALSE" &&
         setting != "no" && setting != "NO";
@@ -4581,7 +4591,9 @@ void prepare_reduced_spmv(
 bool reduced_compressed_autotune_enabled() {
     const char *value =
         std::getenv("HPRLP_USE_REDUCED_COMPRESSED_AUTOTUNE");
-    if (value == nullptr) return true;
+    if (value == nullptr) {
+        return constants::DEFAULT_USE_REDUCED_COMPRESSED_AUTOTUNE;
+    }
     const std::string setting(value);
     return setting != "0" && setting != "false" && setting != "FALSE" &&
         setting != "no" && setting != "NO";
@@ -4590,7 +4602,9 @@ bool reduced_compressed_autotune_enabled() {
 bool reduced_defer_empty_rows_enabled() {
     const char *value =
         std::getenv("HPRLP_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK");
-    if (value == nullptr) return true;
+    if (value == nullptr) {
+        return constants::DEFAULT_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK;
+    }
     const std::string setting(value);
     return setting != "0" && setting != "false" && setting != "FALSE" &&
         setting != "no" && setting != "NO";
@@ -4605,7 +4619,9 @@ void autotune_reduced_compressed_backends(
 bool reduced_nonempty_cusparse_solve_requested() {
     const char *value =
         std::getenv("HPRLP_USE_REDUCED_NONEMPTY_CUSPARSE");
-    if (value == nullptr) return false;
+    if (value == nullptr) {
+        return constants::DEFAULT_USE_REDUCED_NONEMPTY_CUSPARSE;
+    }
     const std::string setting(value);
     return setting == "1" || setting == "true" || setting == "TRUE" ||
            setting == "yes" || setting == "YES";

@@ -16,22 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_HPRLP_ENVIRONMENT = (
-    ("HPRLP_ENABLE_COMPRESSIBLE_MEMORY", "1"),
-    ("HPRLP_USE_ROW_REDUCTION", "1"),
-    ("HPRLP_USE_ROW_COMPRESSED_AUTOTUNE", "1"),
-    ("HPRLP_USE_REDUCED_COMPRESSED_AUTOTUNE", "1"),
-    ("HPRLP_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK", "1"),
-    ("HPRLP_USE_REDUCED_NONEMPTY_CUSPARSE", "1"),
-    ("HPRLP_REDUCED_RESET_MASK_ON_RESTART", "1"),
-    ("HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY", "0.25"),
-    ("HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS", "25000"),
-    ("HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS", "95000"),
-)
-for environment_name, default_value in DEFAULT_HPRLP_ENVIRONMENT:
-    os.environ.setdefault(environment_name, default_value)
-
-
 CSV_HEADER = [
     "name", "iter", "total_time", "presolve_time", "setup_time",
     "scaling_time", "analyze_time", "power_iteration_time", "solve_time",

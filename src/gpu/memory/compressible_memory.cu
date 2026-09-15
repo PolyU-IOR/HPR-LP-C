@@ -1,4 +1,5 @@
 #include "gpu/memory/compressible_memory.h"
+#include "solver/constants.h"
 
 #include <cuda.h>
 #include <cstdlib>
@@ -121,8 +122,10 @@ bool hprlp_compressible_memory_requested() {
     }
     const char *enable_compression =
         std::getenv("HPRLP_ENABLE_COMPRESSIBLE_MEMORY");
-    return enable_compression != nullptr &&
-        std::strcmp(enable_compression, "0") != 0;
+    if (enable_compression == nullptr) {
+        return hprlp::constants::DEFAULT_ENABLE_COMPRESSIBLE_MEMORY;
+    }
+    return std::strcmp(enable_compression, "0") != 0;
 }
 
 cudaError_t hprlp_device_malloc_compressible(void **ptr, std::size_t bytes) {

@@ -490,7 +490,8 @@ static HPRLP_results HPRLP_main_solve_impl(
               << hprlp_compressible_allocation_count()
               << " device_supported="
               << (hprlp_device_supports_compression() ? "yes" : "no")
-              << " (automatic policy or manual HPRLP_ENABLE_COMPRESSIBLE_MEMORY=1)"
+              << " (enabled by default; set "
+                 "HPRLP_ENABLE_COMPRESSIBLE_MEMORY=0 to disable)"
               << std::endl;
 
     std::cout << "Setup (copy and allocation) time = " << std::fixed
