@@ -130,8 +130,8 @@ print(result.x[:, 0])
 ## `Parameters`
 Solver configuration:
 - `max_iter` - Maximum iterations (default: unlimited)
-- `stop_tol` - Stopping tolerance (default: 1e-4)
-- `time_limit` - Time limit in seconds (default: 3600)
+- `stop_tol` - Stopping tolerance (default: 1e-6)
+- `time_limit` - Time limit in seconds (default: 1000)
 - `device_number` - CUDA device ID (default: 0)
 - `check_iter` - Convergence check interval (default: 150)
 - `CUSPARSE_spmv` - Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning (default: False)
@@ -139,7 +139,12 @@ Solver configuration:
 - `use_Ruiz_scaling` - Ruiz scaling (default: True)
 - `use_Pock_Chambolle_scaling` - Pock-Chambolle scaling (default: True)
 - `use_bc_scaling` - Bounds/cost scaling (default: True)
-- `use_presolve` - Embedded PSLP presolve/postsolve in the C core (default: True)
+- `use_presolve` - Enable presolve/postsolve (default: True)
+- `presolver` - Presolver backend (`0`=PSLP, `1`=GPU, `2`=none; default: `1`)
+- `enable_gpu_folding` - GPU presolver folding (default: True)
+- `use_reduced_matrix` - Adaptive reduced-matrix iterations (default: True)
+- `auto_reduced_compression_policy` - Automatic reduced/compression selection
+  from presolved dimensions (default: False)
 
 ### `Results`
 Solution information:
@@ -154,6 +159,12 @@ Solution information:
 - `time` - Solve time (seconds)
 - `iter4/6/8` - Iterations to reach 1e-4/6/8 tolerance
 - `time4/6/8` - Time to reach tolerance
+- `timing` - Presolve, setup, scaling, analysis, power-iteration, solve, and
+  total-time breakdown
+- `folding_time` - GPU presolver folding time
+- `reduced_active_iteration_ratio`, `reduced_average_column_ratio`,
+  `reduced_average_nnz_ratio`, `reduced_minimum_column_ratio`, and
+  `reduced_minimum_nnz_ratio` - Reduced-matrix execution statistics
 
 
 ### `BatchedResults`

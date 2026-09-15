@@ -11,9 +11,9 @@ class Parameters:
     max_iter : int
         Maximum number of iterations (default: 2^31 - 1)
     stop_tol : float
-        Stopping tolerance for convergence (default: 1e-4)
+        Stopping tolerance for convergence (default: 1e-6)
     time_limit : float
-        Maximum time in seconds (default: 3600.0)
+        Maximum time in seconds (default: 1000.0)
     device_number : int
         CUDA device number to use (default: 0)
     check_iter : int
@@ -29,11 +29,13 @@ class Parameters:
     use_bc_scaling : bool
         Enable bound constraint scaling (default: True)
     use_presolve : bool
-        Enable embedded PSLP presolve/postsolve (default: True)
+        Enable presolve/postsolve (default: True)
     use_reduced_matrix : bool
-        Enable reduced-column iterations when automatic policy is disabled (default: False)
+        Enable reduced-matrix iterations when automatic policy is disabled
+        (default: True)
     auto_reduced_compression_policy : bool
-        Select reduced/compression modes from presolved dimensions (default: True)
+        Select reduced/compression modes from presolved dimensions
+        (default: False)
     
     Examples
     --------
@@ -45,18 +47,29 @@ class Parameters:
     
     def __init__(self):
         self.max_iter = 2147483647  # INT32_MAX
-        self.stop_tol = 1e-4
-        self.time_limit = 3600.0
+        self.stop_tol = 1e-6
+        self.time_limit = 1000.0
         self.device_number = 0
         self.check_iter = 150
         self.CUSPARSE_spmv = False
         self.autotune_verbose = False
+        self.enable_progress_monitor = True
+        self.enable_progress_control = True
+        self.enable_sigma_rebalance_restart = True
+        self.use_progress_restart_guard = False
+        self.restart_cooldown_checks = 0
+        self.debug_restart = False
+        self.debug_sigma = False
+        self.fixed_sigma = float('nan')
+        self.use_CR_scaling = True
         self.use_Ruiz_scaling = True
         self.use_Pock_Chambolle_scaling = True
         self.use_bc_scaling = True
         self.use_presolve = True
-        self.use_reduced_matrix = False
-        self.auto_reduced_compression_policy = True
+        self.enable_gpu_folding = True
+        self.presolver = 1  # 0=PSLP, 1=GPU, 2=none
+        self.use_reduced_matrix = True
+        self.auto_reduced_compression_policy = False
         self.print_debug_info = False
         self.specified_parameter_mask = 0
     
@@ -80,10 +93,22 @@ class Parameters:
             param.check_iter = self.check_iter
             param.CUSPARSE_spmv = self.CUSPARSE_spmv
             param.autotune_verbose = self.autotune_verbose
+            param.enable_progress_monitor = self.enable_progress_monitor
+            param.enable_progress_control = self.enable_progress_control
+            param.enable_sigma_rebalance_restart = (
+                self.enable_sigma_rebalance_restart)
+            param.use_progress_restart_guard = self.use_progress_restart_guard
+            param.restart_cooldown_checks = self.restart_cooldown_checks
+            param.debug_restart = self.debug_restart
+            param.debug_sigma = self.debug_sigma
+            param.fixed_sigma = self.fixed_sigma
+            param.use_CR_scaling = self.use_CR_scaling
             param.use_Ruiz_scaling = self.use_Ruiz_scaling
             param.use_Pock_Chambolle_scaling = self.use_Pock_Chambolle_scaling
             param.use_bc_scaling = self.use_bc_scaling
             param.use_presolve = self.use_presolve
+            param.enable_gpu_folding = self.enable_gpu_folding
+            param.presolver = self.presolver
             param.use_reduced_matrix = self.use_reduced_matrix
             param.auto_reduced_compression_policy = (
                 self.auto_reduced_compression_policy)
@@ -112,10 +137,22 @@ class Parameters:
             'check_iter': self.check_iter,
             'CUSPARSE_spmv': self.CUSPARSE_spmv,
             'autotune_verbose': self.autotune_verbose,
+            'enable_progress_monitor': self.enable_progress_monitor,
+            'enable_progress_control': self.enable_progress_control,
+            'enable_sigma_rebalance_restart': (
+                self.enable_sigma_rebalance_restart),
+            'use_progress_restart_guard': self.use_progress_restart_guard,
+            'restart_cooldown_checks': self.restart_cooldown_checks,
+            'debug_restart': self.debug_restart,
+            'debug_sigma': self.debug_sigma,
+            'fixed_sigma': self.fixed_sigma,
+            'use_CR_scaling': self.use_CR_scaling,
             'use_Ruiz_scaling': self.use_Ruiz_scaling,
             'use_Pock_Chambolle_scaling': self.use_Pock_Chambolle_scaling,
             'use_bc_scaling': self.use_bc_scaling,
             'use_presolve': self.use_presolve,
+            'enable_gpu_folding': self.enable_gpu_folding,
+            'presolver': self.presolver,
             'use_reduced_matrix': self.use_reduced_matrix,
             'auto_reduced_compression_policy': (
                 self.auto_reduced_compression_policy),

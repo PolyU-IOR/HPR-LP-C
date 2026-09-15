@@ -209,7 +209,11 @@ class Model:
         
         return Model(core_model)
     
-    def solve(self, param: Optional['Parameter'] = None) -> 'Results':
+    def solve(
+        self,
+        param: Optional['Parameter'] = None,
+        copy_solution: bool = True,
+    ) -> 'Results':
         """
         Solve the model.
         
@@ -217,6 +221,9 @@ class Model:
         ----------
         param : Parameter, optional
             Solver parameters. If None, default parameters are used.
+        copy_solution : bool, optional
+            Whether to copy x/y/z into Python. Dataset summaries can disable
+            this to avoid copying large solution vectors.
         
         Returns
         -------
@@ -235,7 +242,8 @@ class Model:
             core_param = param.to_core_param()
         
         # Solve using C++ core
-        core_results = _hprlp_core.solve(self._core_model, core_param)
+        core_results = _hprlp_core.solve(
+            self._core_model, core_param, copy_solution)
         
         # Convert to Python Results
         return Results.from_core_results(core_results)

@@ -28,6 +28,7 @@ jobs:
       - name: Check Python syntax
         run: |
           python3 -m compileall -q bindings/python scripts
+          python3 tests/run_hans_dataset_test.py
 
       - name: Check shell syntax
         run: |

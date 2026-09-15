@@ -2,17 +2,34 @@
 """Run HPR-LP-C over Hans and maintain a resumable paper-style CSV."""
 
 import argparse
+import ctypes
 import csv
 import math
+import multiprocessing
 import os
 import queue
-import shlex
-import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+
+DEFAULT_HPRLP_ENVIRONMENT = (
+    ("HPRLP_ENABLE_COMPRESSIBLE_MEMORY", "1"),
+    ("HPRLP_USE_ROW_REDUCTION", "1"),
+    ("HPRLP_USE_ROW_COMPRESSED_AUTOTUNE", "1"),
+    ("HPRLP_USE_REDUCED_COMPRESSED_AUTOTUNE", "1"),
+    ("HPRLP_DEFER_REDUCED_EMPTY_ROWS_TO_CHECK", "1"),
+    ("HPRLP_USE_REDUCED_NONEMPTY_CUSPARSE", "1"),
+    ("HPRLP_REDUCED_RESET_MASK_ON_RESTART", "1"),
+    ("HPRLP_REDUCED_RESTART_MASK_MIN_RECOVERY", "0.25"),
+    ("HPRLP_REDUCED_RESTART_MASK_MIN_SAVED_COLUMNS", "25000"),
+    ("HPRLP_REDUCED_RESTART_MASK_MIN_CURRENT_COLUMNS", "95000"),
+)
+for environment_name, default_value in DEFAULT_HPRLP_ENVIRONMENT:
+    os.environ.setdefault(environment_name, default_value)
 
 
 CSV_HEADER = [
@@ -29,43 +46,18 @@ TIME_FIELDS = [
     "total_time", "presolve_time", "setup_time", "scaling_time",
     "analyze_time", "power_iteration_time", "solve_time", "folding_time",
 ]
-SUMMARY_LABELS = {
-    "Status": "status",
-    "Iterations": "iter",
-    "Primal Objective": "primal_obj",
-    "Primal Residual": "res",
-    "Objective Gap": "gap",
-    "Residual": "res",
-    "Gap": "gap",
-    "Presolve Time": "presolve_time",
-    "Setup Time": "setup_time",
-    "Scaling Time": "scaling_time",
-    "Analyze Time": "analyze_time",
-    "Power Time": "power_iteration_time",
-    "Solve Time": "solve_time",
-    "Total Time": "total_time",
-    "Folding Time": "folding_time",
-    "Reduced Active Iteration Ratio": "reduced_active_iteration_ratio",
-    "Reduced Average Column Ratio": "reduced_average_column_ratio",
-    "Reduced Average NNZ Ratio": "reduced_average_nnz_ratio",
-    "Reduced Minimum Column Ratio": "reduced_minimum_column_ratio",
-    "Reduced Minimum NNZ Ratio": "reduced_minimum_nnz_ratio",
-}
-REQUIRED_SUMMARY_FIELDS = {
-    "status", "iter", "primal_obj", "res", "gap", "total_time",
-}
 SUMMARY_NAMES = {"SGM10", "solved"}
 FAILED_HEADER = ["index", "total", "name", "exit_code", "start", "end", "reason", "log"]
-SOLVER_OPTIONS = (
-    ("--time-limit", "time_limit", "HPRLP_TIME_LIMIT"),
-    ("--tol", "tol", "HPRLP_TOL"),
-    ("--check-iter", "check_iter", "HPRLP_CHECK_ITER"),
-    ("--presolver", "presolver", "HPRLP_PRESOLVER"),
-    ("--gpu-folding", "gpu_folding", "HPRLP_GPU_FOLDING"),
-    ("--reduced-matrix", "reduced_matrix", "HPRLP_REDUCED_MATRIX"),
-    ("--auto-memory-policy", "auto_memory_policy", "HPRLP_AUTO_MEMORY_POLICY"),
-    ("--print-debug-info", "print_debug_info", "HPRLP_PRINT_DEBUG_INFO"),
-    ("--max-iter", "max_iter", "HPRLP_MAX_ITER"),
+PARAMETER_OPTIONS = (
+    ("--max-iter", "HPRLP_MAX_ITER", 0),
+    ("--tol", "HPRLP_TOL", 1),
+    ("--time-limit", "HPRLP_TIME_LIMIT", 2),
+    ("--check-iter", "HPRLP_CHECK_ITER", 4),
+    ("--presolver", "HPRLP_PRESOLVER", 19),
+    ("--gpu-folding", "HPRLP_GPU_FOLDING", 20),
+    ("--reduced-matrix", "HPRLP_REDUCED_MATRIX", 21),
+    ("--auto-memory-policy", "HPRLP_AUTO_MEMORY_POLICY", 22),
+    ("--print-debug-info", "HPRLP_PRINT_DEBUG_INFO", 23),
 )
 
 
@@ -88,7 +80,9 @@ def parse_args(argv=None):
         help="Per-instance log directory (default: <output directory>/logs)",
     )
     parser.add_argument("--failed-out", default="", help="Optional failed-instance CSV path")
-    parser.add_argument("--solver", default="./build/solve_mps_file")
+    parser.add_argument(
+        "--solver", default="", help=argparse.SUPPRESS,
+    )
     parser.add_argument("--presolver", default=os.environ.get("HPRLP_PRESOLVER", "gpu"))
     parser.add_argument("--gpu-folding", default=os.environ.get("HPRLP_GPU_FOLDING", "true"))
     parser.add_argument(
@@ -130,12 +124,35 @@ def parse_args(argv=None):
     return args
 
 
-def requested_solver_options(args):
-    options = []
-    for option, attribute, environment_name in SOLVER_OPTIONS:
+def parse_bool(value):
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true"}:
+        return True
+    if normalized in {"0", "false"}:
+        return False
+    raise ValueError(f"expected true or false, got {value!r}")
+
+
+def native_configuration(args, forward_device):
+    presolver = str(args.presolver).strip().lower()
+    if presolver not in {"pslp", "gpu", "none"}:
+        raise ValueError("--presolver must be pslp, gpu, or none")
+    specified_parameter_mask = (1 << 3) if forward_device else 0
+    for option, environment_name, bit in PARAMETER_OPTIONS:
         if option in args.explicit_options or environment_name in os.environ:
-            options.extend([option, str(getattr(args, attribute))])
-    return options
+            specified_parameter_mask |= 1 << bit
+    return {
+        "max_iter": int(args.max_iter),
+        "stop_tol": float(args.tol),
+        "time_limit": float(args.time_limit),
+        "check_iter": int(args.check_iter),
+        "presolver": presolver,
+        "gpu_folding": parse_bool(args.gpu_folding),
+        "use_reduced_matrix": parse_bool(args.reduced_matrix),
+        "auto_reduced_compression_policy": parse_bool(args.auto_memory_policy),
+        "print_debug_info": parse_bool(args.print_debug_info),
+        "specified_parameter_mask": specified_parameter_mask,
+    }
 
 
 def timestamp():
@@ -182,7 +199,7 @@ def normalize_devices(devices, fallback):
 def instance_name(path):
     name = path.name
     lower = name.lower()
-    for suffix in (".mps.gz", ".mps", ".h5"):
+    for suffix in (".mps.gz", ".hdf5", ".mps", ".h5"):
         if lower.endswith(suffix):
             name = name[:-len(suffix)]
             break
@@ -221,23 +238,165 @@ def ensure_csv(path):
 def shifted_geomean(rows, field, shift=10.0):
     values = [float(row[field]) for row in rows if row.get(field) not in (None, "")]
     if not values:
-        return 0.0
+        return None
     result = math.exp(sum(math.log(value + shift) for value in values) / len(values)) - shift
     return 0.0 if abs(result) < 1e-12 else result
 
 
-def parse_summary_line(line, summary, in_summary):
-    stripped = line.strip()
-    if stripped == "=== Solution Summary ===":
-        summary.clear()
-        return True
-    if not in_summary or ":" not in stripped:
-        return in_summary
-    label, value = stripped.split(":", 1)
-    field = SUMMARY_LABELS.get(label)
-    if field:
-        summary[field] = value.strip().removesuffix(" seconds")
-    return in_summary
+def native_result_row(path, result):
+    timing = result.timing
+    return {
+        "name": instance_name(Path(path)),
+        "iter": result.iter,
+        "total_time": timing.total_time,
+        "presolve_time": timing.presolve_time,
+        "setup_time": timing.setup_time,
+        "scaling_time": timing.scaling_time,
+        "analyze_time": timing.analyze_time,
+        "power_iteration_time": timing.power_iteration_time,
+        "solve_time": timing.solve_time,
+        "folding_time": result.folding_time,
+        "res": result.residuals,
+        "primal_obj": result.primal_obj,
+        "gap": result.gap,
+        "status": result.status,
+        "iter_4": result.iter4,
+        "time_4": result.time4,
+        "iter_6": result.iter6,
+        "time_6": result.time6,
+        "iter_8": result.iter8,
+        "time_8": result.time8,
+        "reduced_active_iteration_ratio": result.reduced_active_iteration_ratio,
+        "reduced_average_column_ratio": result.reduced_average_column_ratio,
+        "reduced_average_nnz_ratio": result.reduced_average_nnz_ratio,
+        "reduced_minimum_column_ratio": result.reduced_minimum_column_ratio,
+        "reduced_minimum_nnz_ratio": result.reduced_minimum_nnz_ratio,
+    }
+
+
+def native_parameters(hprlp, configuration, device):
+    parameters = hprlp.Parameters()
+    parameters.max_iter = configuration["max_iter"]
+    parameters.stop_tol = configuration["stop_tol"]
+    parameters.time_limit = configuration["time_limit"]
+    parameters.device_number = device
+    parameters.check_iter = configuration["check_iter"]
+    parameters.use_presolve = configuration["presolver"] != "none"
+    parameters.presolver = {"pslp": 0, "gpu": 1, "none": 2}[
+        configuration["presolver"]
+    ]
+    parameters.enable_gpu_folding = configuration["gpu_folding"]
+    parameters.use_reduced_matrix = configuration["use_reduced_matrix"]
+    parameters.auto_reduced_compression_policy = configuration[
+        "auto_reduced_compression_policy"
+    ]
+    parameters.print_debug_info = configuration["print_debug_info"]
+    parameters.specified_parameter_mask = configuration["specified_parameter_mask"]
+    return parameters
+
+
+@contextmanager
+def redirect_native_output(path):
+    """Redirect Python, C, and C++ process output into one instance log."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", buffering=1) as stream:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        saved_stdout = os.dup(1)
+        saved_stderr = os.dup(2)
+        try:
+            os.dup2(stream.fileno(), 1)
+            os.dup2(stream.fileno(), 2)
+            yield stream
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            try:
+                ctypes.CDLL(None).fflush(None)
+            except (AttributeError, OSError):
+                pass
+            os.dup2(saved_stdout, 1)
+            os.dup2(saved_stderr, 2)
+            os.close(saved_stdout)
+            os.close(saved_stderr)
+
+
+def native_binding_preflight():
+    import hprlp
+    from hprlp import _hprlp_core
+
+    result = _hprlp_core.Results()
+    required_fields = (
+        "folding_time",
+        "reduced_active_iteration_ratio",
+        "reduced_average_column_ratio",
+        "reduced_average_nnz_ratio",
+        "reduced_minimum_column_ratio",
+        "reduced_minimum_nnz_ratio",
+    )
+    missing = [field for field in required_fields if not hasattr(result, field)]
+    if missing:
+        raise RuntimeError(
+            "installed hprlp binding is missing native result fields: "
+            + ", ".join(missing)
+            + "; reinstall it with `python -m pip install --force-reinstall "
+              "./bindings/python`"
+        )
+    return hprlp.__version__
+
+
+def solve_native_instance(index, total, path, log_path, device, configuration):
+    start = timestamp()
+    model = None
+    try:
+        with redirect_native_output(log_path):
+            import hprlp
+
+            os.environ["HPRLP_PRINT_DEBUG_INFO"] = (
+                "1" if configuration["print_debug_info"] else "0"
+            )
+            print(f"Reading file {path}", flush=True)
+            model = hprlp.Model.from_mps(path)
+            print(f"Reading time: {model.read_time:.2f}s", flush=True)
+            parameters = native_parameters(hprlp, configuration, device)
+            result = model.solve(parameters, copy_solution=False)
+            row = native_result_row(path, result)
+        return {
+            "index": index,
+            "total": total,
+            "device": device,
+            "name": Path(path).name,
+            "row": row,
+            "status": result.status,
+            "success": True,
+            "reason": "",
+            "start": start,
+            "end": timestamp(),
+            "log": log_path,
+        }
+    except Exception as error:
+        message = f"{type(error).__name__}: {error}"
+        lower = message.lower()
+        reason = "OOM" if "out of memory" in lower or "cuda error 2" in lower else message
+        with Path(log_path).open("a") as stream:
+            stream.write(f"\nRUNNER_ERROR: {message}\n")
+        return {
+            "index": index,
+            "total": total,
+            "device": device,
+            "name": Path(path).name,
+            "row": None,
+            "status": "SOLVE_ERROR",
+            "success": False,
+            "reason": reason,
+            "start": start,
+            "end": timestamp(),
+            "log": log_path,
+        }
+    finally:
+        if model is not None:
+            model.free()
 
 
 def is_solved(status):
@@ -251,7 +410,9 @@ def write_summary(path):
     summary = {field: "" for field in CSV_HEADER}
     summary["name"] = "SGM10"
     for field in ["iter"] + TIME_FIELDS:
-        summary[field] = f"{shifted_geomean(rows, field):.15g}"
+        value = shifted_geomean(rows, field)
+        if value is not None:
+            summary[field] = f"{value:.15g}"
     solved_count = sum(is_solved(row["status"]) for row in rows)
     solved = {field: "" for field in CSV_HEADER}
     solved.update({"name": "solved", "solve_time": str(solved_count), "total_time": str(solved_count)})
@@ -275,10 +436,7 @@ def log_section(handle, title):
 def main():
     args = parse_args()
     data_dir = Path(args.data_dir)
-    solver = Path(args.solver)
     out, combined_log_path, logs_dir, failed = output_paths(args)
-    solver_options = requested_solver_options(args)
-    solver_options_text = " ".join(shlex.quote(part) for part in solver_options)
     forward_device = bool(
         {"--devices", "--device"} & args.explicit_options
         or "HPRLP_DEVICES" in os.environ
@@ -286,15 +444,13 @@ def main():
     )
     try:
         devices = normalize_devices(args.devices, args.device)
+        configuration = native_configuration(args, forward_device)
     except ValueError as error:
-        print(f"Invalid --devices/--device value: {error}", file=sys.stderr)
+        print(f"Invalid runner option: {error}", file=sys.stderr)
         return 2
 
     if not data_dir.is_dir():
         print(f"Data directory not found: {data_dir}", file=sys.stderr)
-        return 2
-    if not solver.is_file():
-        print(f"Solver executable not found: {solver}", file=sys.stderr)
         return 2
 
     files = sorted(data_dir.glob(args.pattern))
@@ -317,11 +473,17 @@ def main():
     print(f"[hans-run] log={combined_log_path}")
     print(f"[hans-run] logs={logs_dir}")
     print(f"[hans-run] devices={','.join(map(str, devices))}")
-    print(f"[hans-run] solver_options={solver_options_text or '(none)'}")
+    print("[hans-run] backend=native Python binding")
+    if args.solver:
+        print("[hans-run] warning: --solver is deprecated and ignored")
+    print(
+        "[hans-run] parameters="
+        + ",".join(f"{key}={value}" for key, value in configuration.items())
+    )
 
     jobs = queue.Queue()
     for index, mps_path in enumerate(files, start=1):
-        if mps_path.name in done:
+        if instance_name(mps_path) in done:
             print(f"[hans-run] skip {index}/{len(files)} {mps_path.name}")
         else:
             jobs.put((index, mps_path))
@@ -330,122 +492,157 @@ def main():
     log_lock = threading.Lock()
     stop_event = threading.Event()
     state = {"had_failure": False}
+    native_executors = {}
 
-    with combined_log_path.open("a") as combined_log:
-        with log_lock:
-            log_section(combined_log, f"HPRLP Hans run start {timestamp()}")
-            combined_log.write(
-                f"data_dir: {data_dir}\nout: {out}\nfailed_out: {failed or 'disabled'}\n"
-                f"logs_dir: {logs_dir}\n"
-                f"devices: {','.join(map(str, devices))}\n"
-                f"solver_options: {solver_options_text or '(none)'}\n"
-                f"matched: {len(files)}\nalready_done: {len(done)}\n"
-            )
-            combined_log.flush()
-
-        def run_instance(index, mps_path, device):
-            name = mps_path.name
-            cmd = [str(solver), "-i", str(mps_path)]
-            if forward_device:
-                cmd.extend(["--device", str(device)])
-            cmd.extend(solver_options)
-            command_text = " ".join(shlex.quote(part) for part in cmd)
-            print(
-                f"[hans-run] run {index}/{len(files)} {name} on device {device}",
-                flush=True,
-            )
-            print(f"[hans-run] cmd {command_text}", flush=True)
-            with log_lock:
-                log_section(
-                    combined_log,
-                    f"[{index}/{len(files)}] {name} (device {device})",
+    if not args.dry_run and not jobs.empty():
+        context = multiprocessing.get_context("spawn")
+        try:
+            for device in devices:
+                native_executors[device] = ProcessPoolExecutor(
+                    max_workers=1,
+                    mp_context=context,
                 )
-                combined_log.write(f"start: {timestamp()}\ncommand: {command_text}\n\n")
-                combined_log.flush()
-            if args.dry_run:
-                return
+            checks = [
+                executor.submit(native_binding_preflight)
+                for executor in native_executors.values()
+            ]
+            versions = {check.result() for check in checks}
+            print(f"[hans-run] hprlp={','.join(sorted(versions))}")
+        except Exception as error:
+            for executor in native_executors.values():
+                executor.shutdown(wait=True, cancel_futures=True)
+            print(
+                "Unable to load the native Python binding in dataset workers: "
+                f"{error}\nInstall it with: "
+                "python -m pip install --force-reinstall ./bindings/python",
+                file=sys.stderr,
+            )
+            return 2
 
-            instance_log_path = logs_dir / instance_log_name(mps_path)
-            start = timestamp()
-            reason = ""
-            summary = {}
-            in_summary = False
-            return_code = -1
-            try:
-                with instance_log_path.open("w", buffering=1) as instance_log:
-                    proc = subprocess.Popen(
-                        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1,
-                    )
-                    assert proc.stdout is not None
-                    for line in proc.stdout:
-                        in_summary = parse_summary_line(line, summary, in_summary)
-                        lower = line.lower()
-                        if not reason and (
-                            "out of memory" in lower or "cuda error 2" in lower
-                        ):
-                            reason = "OOM"
-                        elif not reason and "terminate called" in lower:
-                            reason = "ABORT"
-                        instance_log.write(line)
-                        with log_lock:
-                            combined_log.write(f"[{name} gpu={device}] {line}")
-                            combined_log.flush()
-                    return_code = proc.wait()
-            except Exception as error:
-                reason = f"RUNNER_ERROR:{type(error).__name__}:{error}"
-
-            end = timestamp()
+    try:
+        with combined_log_path.open("a") as combined_log:
             with log_lock:
-                combined_log.write(f"\nend: {end} exit={return_code}\n")
+                log_section(combined_log, f"HPRLP Hans run start {timestamp()}")
+                combined_log.write(
+                    f"data_dir: {data_dir}\nout: {out}\n"
+                    f"failed_out: {failed or 'disabled'}\nlogs_dir: {logs_dir}\n"
+                    f"devices: {','.join(map(str, devices))}\n"
+                    "backend: native Python binding\n"
+                    f"parameters: {configuration}\n"
+                    f"matched: {len(files)}\nalready_done: {len(done)}\n"
+                )
                 combined_log.flush()
-            missing = sorted(REQUIRED_SUMMARY_FIELDS - summary.keys())
-            parse_failed = return_code == 0 and bool(missing)
-            if parse_failed:
-                reason = "MISSING_SUMMARY_FIELDS:" + ",".join(missing)
 
-            if return_code != 0 or parse_failed:
-                with state_lock:
-                    state["had_failure"] = True
-                    if failed:
-                        append_failed(failed, {
-                            "index": index, "total": len(files), "name": name,
-                            "exit_code": return_code, "start": start,
-                            "end": end, "reason": reason or f"EXIT_{return_code}",
-                            "log": instance_log_path,
-                        })
-                failure_detail = reason or f"exit={return_code}"
-                print(f"[hans-run] failed {name}: {failure_detail}", file=sys.stderr)
-                if args.stop_on_failure:
-                    stop_event.set()
-            else:
-                row = {field: summary.get(field, "") for field in CSV_HEADER}
-                row["name"] = name
-                with state_lock:
-                    old_rows.append(row)
-                    write_rows(out, old_rows)
-                print(f"[hans-run] done {name} on device {device}", flush=True)
+            def record_outcome(outcome):
+                name = outcome["name"]
+                log_path = Path(outcome["log"])
+                with log_lock:
+                    log_section(
+                        combined_log,
+                        f"[{outcome['index']}/{outcome['total']}] {name} "
+                        f"(device {outcome['device']})",
+                    )
+                    combined_log.write(f"start: {outcome['start']}\n")
+                    if log_path.exists():
+                        with log_path.open(errors="replace") as instance_log:
+                            for line in instance_log:
+                                combined_log.write(
+                                    f"[{name} gpu={outcome['device']}] {line}"
+                                )
+                    combined_log.write(
+                        f"\nend: {outcome['end']} status={outcome['status']}\n"
+                    )
+                    combined_log.flush()
 
-        def device_worker(device):
-            while not stop_event.is_set():
-                try:
-                    index, mps_path = jobs.get_nowait()
-                except queue.Empty:
+                if not outcome["success"]:
+                    with state_lock:
+                        state["had_failure"] = True
+                        if failed:
+                            append_failed(failed, {
+                                "index": outcome["index"],
+                                "total": outcome["total"],
+                                "name": name,
+                                "exit_code": 1,
+                                "start": outcome["start"],
+                                "end": outcome["end"],
+                                "reason": outcome["reason"],
+                                "log": log_path,
+                            })
+                    print(
+                        f"[hans-run] failed {name}: {outcome['reason']}",
+                        file=sys.stderr,
+                    )
+                    if args.stop_on_failure:
+                        stop_event.set()
                     return
+
+                with state_lock:
+                    old_rows.append(outcome["row"])
+                    write_rows(out, old_rows)
+                print(
+                    f"[hans-run] done {name} on device {outcome['device']}",
+                    flush=True,
+                )
+
+            def run_instance(index, mps_path, device):
+                name = mps_path.name
+                print(
+                    f"[hans-run] run {index}/{len(files)} {name} "
+                    f"on device {device}",
+                    flush=True,
+                )
+                if args.dry_run:
+                    return
+                log_path = logs_dir / instance_log_name(mps_path)
                 try:
-                    run_instance(index, mps_path, device)
-                finally:
-                    jobs.task_done()
+                    outcome = native_executors[device].submit(
+                        solve_native_instance,
+                        index,
+                        len(files),
+                        str(mps_path),
+                        str(log_path),
+                        device,
+                        configuration,
+                    ).result()
+                except Exception as error:
+                    outcome = {
+                        "index": index,
+                        "total": len(files),
+                        "device": device,
+                        "name": name,
+                        "row": None,
+                        "status": "WORKER_ERROR",
+                        "success": False,
+                        "reason": f"WORKER_ERROR:{type(error).__name__}:{error}",
+                        "start": timestamp(),
+                        "end": timestamp(),
+                        "log": str(log_path),
+                    }
+                record_outcome(outcome)
 
-        with ThreadPoolExecutor(
-            max_workers=len(devices), thread_name_prefix="hprlp-gpu",
-        ) as executor:
-            futures = [executor.submit(device_worker, device) for device in devices]
-            for future in futures:
-                future.result()
+            def device_worker(device):
+                while not stop_event.is_set():
+                    try:
+                        index, mps_path = jobs.get_nowait()
+                    except queue.Empty:
+                        return
+                    try:
+                        run_instance(index, mps_path, device)
+                    finally:
+                        jobs.task_done()
 
-        with log_lock:
-            log_section(combined_log, f"HPRLP Hans run finished {timestamp()}")
+            with ThreadPoolExecutor(
+                max_workers=len(devices), thread_name_prefix="hprlp-gpu",
+            ) as executor:
+                futures = [executor.submit(device_worker, device) for device in devices]
+                for future in futures:
+                    future.result()
+
+            with log_lock:
+                log_section(combined_log, f"HPRLP Hans run finished {timestamp()}")
+    finally:
+        for executor in native_executors.values():
+            executor.shutdown(wait=True, cancel_futures=True)
 
     if not args.dry_run:
         write_summary(out)

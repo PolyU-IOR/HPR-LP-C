@@ -34,11 +34,21 @@ public:
     int check_iter;
     bool CUSPARSE_spmv;
     bool autotune_verbose;
+    bool enable_progress_monitor;
+    bool enable_progress_control;
+    bool enable_sigma_rebalance_restart;
+    bool use_progress_restart_guard;
+    int restart_cooldown_checks;
+    bool debug_restart;
+    bool debug_sigma;
+    double fixed_sigma;
     bool use_CR_scaling;
     bool use_Ruiz_scaling;
     bool use_Pock_Chambolle_scaling;
     bool use_bc_scaling;
     bool use_presolve;
+    bool enable_gpu_folding;
+    int presolver;
     bool use_reduced_matrix;
     bool auto_reduced_compression_policy;
     bool print_debug_info;
@@ -46,19 +56,29 @@ public:
 
     PyParameter() 
         : max_iter(INT32_MAX),
-          stop_tol(1e-4),
-          time_limit(3600.0),
+          stop_tol(1e-6),
+          time_limit(1000.0),
           device_number(0),
           check_iter(150),
           CUSPARSE_spmv(false),
           autotune_verbose(false),
-          use_CR_scaling(false),
+          enable_progress_monitor(true),
+          enable_progress_control(true),
+          enable_sigma_rebalance_restart(true),
+          use_progress_restart_guard(false),
+          restart_cooldown_checks(0),
+          debug_restart(false),
+          debug_sigma(false),
+          fixed_sigma(std::numeric_limits<double>::quiet_NaN()),
+          use_CR_scaling(true),
           use_Ruiz_scaling(true),
           use_Pock_Chambolle_scaling(true),
           use_bc_scaling(true),
           use_presolve(true),
-          use_reduced_matrix(false),
-          auto_reduced_compression_policy(true),
+          enable_gpu_folding(true),
+          presolver(static_cast<int>(HPRLP_PRESOLVER_GPU)),
+          use_reduced_matrix(true),
+          auto_reduced_compression_policy(false),
           print_debug_info(false),
           specified_parameter_mask(0) {}
 
@@ -72,11 +92,27 @@ public:
         param.check_iter = check_iter;
         param.CUSPARSE_spmv = CUSPARSE_spmv;
         param.autotune_verbose = autotune_verbose;
+        param.enable_progress_monitor = enable_progress_monitor;
+        param.enable_progress_control = enable_progress_control;
+        param.enable_sigma_rebalance_restart =
+            enable_sigma_rebalance_restart;
+        param.use_progress_restart_guard = use_progress_restart_guard;
+        param.restart_cooldown_checks = restart_cooldown_checks;
+        param.debug_restart = debug_restart;
+        param.debug_sigma = debug_sigma;
+        param.fixed_sigma = fixed_sigma;
         param.use_CR_scaling = use_CR_scaling;
         param.use_Ruiz_scaling = use_Ruiz_scaling;
         param.use_Pock_Chambolle_scaling = use_Pock_Chambolle_scaling;
         param.use_bc_scaling = use_bc_scaling;
         param.use_presolve = use_presolve;
+        param.enable_gpu_folding = enable_gpu_folding;
+        if (presolver < static_cast<int>(HPRLP_PRESOLVER_PSLP) ||
+            presolver > static_cast<int>(HPRLP_PRESOLVER_NONE)) {
+            throw std::invalid_argument(
+                "presolver must be 0 (pslp), 1 (gpu), or 2 (none)");
+        }
+        param.presolver = static_cast<HPRLP_presolve_backend>(presolver);
         param.use_reduced_matrix = use_reduced_matrix;
         param.auto_reduced_compression_policy =
             auto_reduced_compression_policy;
@@ -133,24 +169,52 @@ public:
     double time6;
     double time8;
     double time;
+    double folding_time;
     PyTime timing;
     int iter4;
     int iter6;
     int iter8;
     int iter;
     std::string status;
+    double interior_percentage;
+    int reduced_activation_checks;
+    int reduced_active_iterations;
+    int reduced_first_iteration;
+    int reduced_rebuilds;
+    double reduced_build_time;
+    int reduced_last_trigger_iteration;
+    double reduced_last_free_ratio;
+    double reduced_last_trigger_residual;
+    double reduced_last_trigger_sigma;
+    int reduced_last_free_columns;
+    double reduced_active_iteration_ratio;
+    double reduced_average_column_ratio;
+    double reduced_average_nnz_ratio;
+    double reduced_minimum_column_ratio;
+    double reduced_minimum_nnz_ratio;
     std::vector<double> x;  // Primal solution
     std::vector<double> y;  // Dual solution
     std::vector<double> z;  // Bound-dual solution
 
     PyResults() 
         : residuals(0), primal_obj(0), gap(0),
-          time4(0), time6(0), time8(0), time(0),
+          time4(0), time6(0), time8(0), time(0), folding_time(0),
           iter4(0), iter6(0), iter8(0), iter(0),
-          status("UNKNOWN") {}
+          status("UNKNOWN"), interior_percentage(100.0),
+          reduced_activation_checks(0), reduced_active_iterations(0),
+          reduced_first_iteration(-1), reduced_rebuilds(0),
+          reduced_build_time(0.0), reduced_last_trigger_iteration(-1),
+          reduced_last_free_ratio(1.0),
+          reduced_last_trigger_residual(std::numeric_limits<double>::infinity()),
+          reduced_last_trigger_sigma(std::numeric_limits<double>::quiet_NaN()),
+          reduced_last_free_columns(0), reduced_active_iteration_ratio(0.0),
+          reduced_average_column_ratio(1.0), reduced_average_nnz_ratio(1.0),
+          reduced_minimum_column_ratio(1.0), reduced_minimum_nnz_ratio(1.0) {}
 
     // Construct from C HPRLP_results struct
-    static PyResults from_c_struct(const HPRLP_results& result, int n, int m) {
+    static PyResults from_c_struct(
+            const HPRLP_results& result, int n, int m,
+            bool copy_solution = true) {
         PyResults py_result;
         py_result.residuals = result.residuals;
         py_result.primal_obj = result.primal_obj;
@@ -159,21 +223,44 @@ public:
         py_result.time6 = result.time6;
         py_result.time8 = result.time8;
         py_result.time = result.time;
+        py_result.folding_time = result.folding_time;
         py_result.timing = PyTime::from_c_struct(result.timing);
         py_result.iter4 = result.iter4;
         py_result.iter6 = result.iter6;
         py_result.iter8 = result.iter8;
         py_result.iter = result.iter;
         py_result.status = std::string(result.status);  // Convert char array to string
+        py_result.interior_percentage = result.interior_percentage;
+        py_result.reduced_activation_checks = result.reduced_activation_checks;
+        py_result.reduced_active_iterations = result.reduced_active_iterations;
+        py_result.reduced_first_iteration = result.reduced_first_iteration;
+        py_result.reduced_rebuilds = result.reduced_rebuilds;
+        py_result.reduced_build_time = result.reduced_build_time;
+        py_result.reduced_last_trigger_iteration =
+            result.reduced_last_trigger_iteration;
+        py_result.reduced_last_free_ratio = result.reduced_last_free_ratio;
+        py_result.reduced_last_trigger_residual =
+            result.reduced_last_trigger_residual;
+        py_result.reduced_last_trigger_sigma =
+            result.reduced_last_trigger_sigma;
+        py_result.reduced_last_free_columns = result.reduced_last_free_columns;
+        py_result.reduced_active_iteration_ratio =
+            result.reduced_active_iteration_ratio;
+        py_result.reduced_average_column_ratio =
+            result.reduced_average_column_ratio;
+        py_result.reduced_average_nnz_ratio = result.reduced_average_nnz_ratio;
+        py_result.reduced_minimum_column_ratio =
+            result.reduced_minimum_column_ratio;
+        py_result.reduced_minimum_nnz_ratio = result.reduced_minimum_nnz_ratio;
 
         // Copy solution vectors
-        if (result.x != nullptr) {
+        if (copy_solution && result.x != nullptr) {
             py_result.x = std::vector<double>(result.x, result.x + n);
         }
-        if (result.y != nullptr) {
+        if (copy_solution && result.y != nullptr) {
             py_result.y = std::vector<double>(result.y, result.y + m);
         }
-        if (result.z != nullptr) {
+        if (copy_solution && result.z != nullptr) {
             py_result.z = std::vector<double>(result.z, result.z + n);
         }
 
@@ -189,12 +276,29 @@ public:
         d["time6"] = time6;
         d["time8"] = time8;
         d["time"] = time;
+        d["folding_time"] = folding_time;
         d["timing"] = timing.to_dict();
         d["iter4"] = iter4;
         d["iter6"] = iter6;
         d["iter8"] = iter8;
         d["iter"] = iter;
         d["status"] = status;
+        d["interior_percentage"] = interior_percentage;
+        d["reduced_activation_checks"] = reduced_activation_checks;
+        d["reduced_active_iterations"] = reduced_active_iterations;
+        d["reduced_first_iteration"] = reduced_first_iteration;
+        d["reduced_rebuilds"] = reduced_rebuilds;
+        d["reduced_build_time"] = reduced_build_time;
+        d["reduced_last_trigger_iteration"] = reduced_last_trigger_iteration;
+        d["reduced_last_free_ratio"] = reduced_last_free_ratio;
+        d["reduced_last_trigger_residual"] = reduced_last_trigger_residual;
+        d["reduced_last_trigger_sigma"] = reduced_last_trigger_sigma;
+        d["reduced_last_free_columns"] = reduced_last_free_columns;
+        d["reduced_active_iteration_ratio"] = reduced_active_iteration_ratio;
+        d["reduced_average_column_ratio"] = reduced_average_column_ratio;
+        d["reduced_average_nnz_ratio"] = reduced_average_nnz_ratio;
+        d["reduced_minimum_column_ratio"] = reduced_minimum_column_ratio;
+        d["reduced_minimum_nnz_ratio"] = reduced_minimum_nnz_ratio;
         d["x"] = x;
         d["y"] = y;
         d["z"] = z;
@@ -428,7 +532,9 @@ static std::vector<double> copy_vector(py::array_t<double> arr, int len, const c
 /**
  * @brief Solve model
  */
-PyResults solve_model_py(const PyModel& py_model, const PyParameter* py_param_ptr) {
+PyResults solve_model_py(
+        const PyModel& py_model, const PyParameter* py_param_ptr,
+        bool copy_solution) {
     if (!py_model.is_valid()) {
         throw std::invalid_argument("Invalid model: model is null");
     }
@@ -450,7 +556,8 @@ PyResults solve_model_py(const PyModel& py_model, const PyParameter* py_param_pt
     int m = py_model.get_m();
 
     // Convert to Python result
-    PyResults py_result = PyResults::from_c_struct(result, n, m);
+    PyResults py_result =
+        PyResults::from_c_struct(result, n, m, copy_solution);
 
     // Free C result memory (x and y were allocated by solve)
     if (result.x != nullptr) {
@@ -533,9 +640,9 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readwrite("max_iter", &PyParameter::max_iter, 
                       "Maximum number of iterations (default: INT_MAX)")
         .def_readwrite("stop_tol", &PyParameter::stop_tol,
-                      "Stopping tolerance (default: 1e-4)")
+                      "Stopping tolerance (default: 1e-6)")
         .def_readwrite("time_limit", &PyParameter::time_limit,
-                      "Time limit in seconds (default: 3600.0)")
+                      "Time limit in seconds (default: 1000.0)")
         .def_readwrite("device_number", &PyParameter::device_number,
                       "CUDA device number (default: 0)")
         .def_readwrite("check_iter", &PyParameter::check_iter,
@@ -544,8 +651,19 @@ PYBIND11_MODULE(_hprlp_core, m) {
                   "Force the cuSPARSE SpMVOp path and disable fused-kernel autotuning")
         .def_readwrite("autotune_verbose", &PyParameter::autotune_verbose,
                   "Print backend autotuning diagnostics when fused kernels are enabled")
+        .def_readwrite("enable_progress_monitor", &PyParameter::enable_progress_monitor)
+        .def_readwrite("enable_progress_control", &PyParameter::enable_progress_control)
+        .def_readwrite("enable_sigma_rebalance_restart",
+                      &PyParameter::enable_sigma_rebalance_restart)
+        .def_readwrite("use_progress_restart_guard",
+                      &PyParameter::use_progress_restart_guard)
+        .def_readwrite("restart_cooldown_checks",
+                      &PyParameter::restart_cooldown_checks)
+        .def_readwrite("debug_restart", &PyParameter::debug_restart)
+        .def_readwrite("debug_sigma", &PyParameter::debug_sigma)
+        .def_readwrite("fixed_sigma", &PyParameter::fixed_sigma)
         .def_readwrite("use_CR_scaling", &PyParameter::use_CR_scaling,
-              "Use Curtis-Reid prescaling before Ruiz scaling (default: False)")
+              "Use Curtis-Reid prescaling before Ruiz scaling (default: True)")
         .def_readwrite("use_Ruiz_scaling", &PyParameter::use_Ruiz_scaling,
                       "Use Ruiz scaling (default: True)")
         .def_readwrite("use_Pock_Chambolle_scaling", &PyParameter::use_Pock_Chambolle_scaling,
@@ -553,12 +671,16 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readwrite("use_bc_scaling", &PyParameter::use_bc_scaling,
                       "Use bound constraint scaling (default: True)")
         .def_readwrite("use_presolve", &PyParameter::use_presolve,
-                      "Enable embedded PSLP presolve/postsolve (default: True)")
+                      "Enable presolve/postsolve (default: True)")
+        .def_readwrite("enable_gpu_folding", &PyParameter::enable_gpu_folding,
+                      "Enable GPU presolver folding (default: True)")
+        .def_readwrite("presolver", &PyParameter::presolver,
+                      "Presolver backend: 0=pslp, 1=gpu, 2=none")
         .def_readwrite("use_reduced_matrix", &PyParameter::use_reduced_matrix,
-                      "Enable reduced-column iterations in manual mode (default: False)")
+                      "Enable reduced-matrix iterations in manual mode (default: True)")
         .def_readwrite("auto_reduced_compression_policy",
                       &PyParameter::auto_reduced_compression_policy,
-                      "Select reduced/compression modes from presolved dimensions (default: True)")
+                      "Select reduced/compression modes from presolved dimensions (default: False)")
         .def_readwrite("print_debug_info", &PyParameter::print_debug_info,
                       "Print detailed solver diagnostics (default: False)")
         .def_readwrite("specified_parameter_mask", &PyParameter::specified_parameter_mask,
@@ -589,12 +711,38 @@ PYBIND11_MODULE(_hprlp_core, m) {
         .def_readonly("time6", &PyResults::time6, "Time to reach 1e-6 tolerance")
         .def_readonly("time8", &PyResults::time8, "Time to reach 1e-8 tolerance")
         .def_readonly("time", &PyResults::time, "Main iteration-loop solve time")
+        .def_readonly("folding_time", &PyResults::folding_time,
+                      "GPU presolver folding time")
         .def_readonly("timing", &PyResults::timing, "Detailed solve timing")
         .def_readonly("iter4", &PyResults::iter4, "Iterations to reach 1e-4")
         .def_readonly("iter6", &PyResults::iter6, "Iterations to reach 1e-6")
         .def_readonly("iter8", &PyResults::iter8, "Iterations to reach 1e-8")
         .def_readonly("iter", &PyResults::iter, "Total iterations")
         .def_readonly("status", &PyResults::status, "Solver status")
+        .def_readonly("interior_percentage", &PyResults::interior_percentage)
+        .def_readonly("reduced_activation_checks", &PyResults::reduced_activation_checks)
+        .def_readonly("reduced_active_iterations", &PyResults::reduced_active_iterations)
+        .def_readonly("reduced_first_iteration", &PyResults::reduced_first_iteration)
+        .def_readonly("reduced_rebuilds", &PyResults::reduced_rebuilds)
+        .def_readonly("reduced_build_time", &PyResults::reduced_build_time)
+        .def_readonly("reduced_last_trigger_iteration",
+                      &PyResults::reduced_last_trigger_iteration)
+        .def_readonly("reduced_last_free_ratio", &PyResults::reduced_last_free_ratio)
+        .def_readonly("reduced_last_trigger_residual",
+                      &PyResults::reduced_last_trigger_residual)
+        .def_readonly("reduced_last_trigger_sigma",
+                      &PyResults::reduced_last_trigger_sigma)
+        .def_readonly("reduced_last_free_columns", &PyResults::reduced_last_free_columns)
+        .def_readonly("reduced_active_iteration_ratio",
+                      &PyResults::reduced_active_iteration_ratio)
+        .def_readonly("reduced_average_column_ratio",
+                      &PyResults::reduced_average_column_ratio)
+        .def_readonly("reduced_average_nnz_ratio",
+                      &PyResults::reduced_average_nnz_ratio)
+        .def_readonly("reduced_minimum_column_ratio",
+                      &PyResults::reduced_minimum_column_ratio)
+        .def_readonly("reduced_minimum_nnz_ratio",
+                      &PyResults::reduced_minimum_nnz_ratio)
         .def_readonly("x", &PyResults::x, "Primal solution vector")
         .def_readonly("y", &PyResults::y, "Dual solution vector")
         .def_readonly("z", &PyResults::z, "Bound-dual solution vector")
@@ -715,6 +863,7 @@ PYBIND11_MODULE(_hprlp_core, m) {
     m.def("solve", &solve_model_py,
           py::arg("model"),
           py::arg("param") = nullptr,
+          py::arg("copy_solution") = true,
           R"pbdoc(
         Solve an LP model.
 
@@ -724,6 +873,9 @@ PYBIND11_MODULE(_hprlp_core, m) {
             LP model to solve
         param : Parameters, optional
             Solver parameters (default: None, uses default parameters)
+        copy_solution : bool, optional
+            Copy x/y/z into Python (default: True). Dataset summaries can set
+            this to False to avoid copying large solution vectors.
 
         Returns
         -------

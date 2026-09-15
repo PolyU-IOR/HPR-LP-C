@@ -218,22 +218,22 @@ Release validation uses `--tol 1e-6`, `--time-limit 1000`, and
 The batch script runs sorted `*.mps.gz` files, resumes from rows already
 present, and rewrites `SGM10` and `solved` rows at the bottom of
 `HPRLP_result.csv`. Pass a comma-separated device list with `--devices`. One
-worker is bound to each device; whenever it finishes an instance, it takes the
-next pending instance. Completed rows are serialized into the shared CSV, and
-line-buffered instance logs are written automatically to
-`<output directory>/logs/<instance_name>.log`. The combined run log remains in
-`HPRLP_log.txt`; `--logs-dir` can override the instance-log directory, and
+native Python worker process is bound to each device; whenever it finishes an
+instance, it takes the next pending instance. The runner reads timing,
+convergence-milestone, and reduced-matrix statistics directly from the native
+result object instead of parsing console output. Completed rows are serialized
+into the shared CSV, and line-buffered instance logs are written automatically
+to `<output directory>/logs/<instance_name>.log`. The combined run log remains
+in `HPRLP_log.txt`; `--logs-dir` can override the instance-log directory, and
 `--failed-out` enables a failed-instance CSV. The existing `--device` option is
 retained as the single-device fallback when `--devices` is omitted.
-Only solver options supplied explicitly on the script command line (or through
-their corresponding `HPRLP_*` environment variables) are forwarded to
-`solve_mps_file`; `--devices` is translated to one `--device` assignment per
-worker.
+Script options and their corresponding `HPRLP_*` environment variables
+configure the native parameters; each worker receives its assigned device.
 
 ```bash
+python -m pip install ./bindings/python
 python3 scripts/run_hans_dataset.py \
   --data-dir /path/to/Hans \
-  --solver ./build/solve_mps_file \
   --out-dir Results/hans \
   --presolver gpu \
   --gpu-folding true \
@@ -242,6 +242,11 @@ python3 scripts/run_hans_dataset.py \
   --tol 1e-6 \
   --check-iter 150
 ```
+
+Reinstall the Python package after rebuilding or updating HPR-LP-C so the
+runner and native result structure stay synchronized. Existing rows are kept
+unchanged by `--resume`; use `--no-resume` or a new output directory to
+regenerate CSV files created by the older console-output parser.
 
 ## Julia dataset run
 

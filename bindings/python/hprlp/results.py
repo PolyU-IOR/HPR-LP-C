@@ -96,6 +96,7 @@ class Results:
         self.residuals: float = float('inf')
         self.iter: int = 0
         self.time: float = 0.0
+        self.folding_time: float = 0.0
         self.timing = Timing()
         self.iter4: int = 0
         self.iter6: int = 0
@@ -103,6 +104,22 @@ class Results:
         self.time4: float = 0.0
         self.time6: float = 0.0
         self.time8: float = 0.0
+        self.interior_percentage: float = 100.0
+        self.reduced_activation_checks: int = 0
+        self.reduced_active_iterations: int = 0
+        self.reduced_first_iteration: int = -1
+        self.reduced_rebuilds: int = 0
+        self.reduced_build_time: float = 0.0
+        self.reduced_last_trigger_iteration: int = -1
+        self.reduced_last_free_ratio: float = 1.0
+        self.reduced_last_trigger_residual: float = float('inf')
+        self.reduced_last_trigger_sigma: float = float('nan')
+        self.reduced_last_free_columns: int = 0
+        self.reduced_active_iteration_ratio: float = 0.0
+        self.reduced_average_column_ratio: float = 1.0
+        self.reduced_average_nnz_ratio: float = 1.0
+        self.reduced_minimum_column_ratio: float = 1.0
+        self.reduced_minimum_nnz_ratio: float = 1.0
     
     def is_optimal(self) -> bool:
         """Check if solution is optimal"""
@@ -166,6 +183,7 @@ class Results:
             'residuals': self.residuals,
             'iter': self.iter,
             'time': self.time,
+            'folding_time': self.folding_time,
             'timing': self.timing.to_dict(),
             'iter4': self.iter4,
             'iter6': self.iter6,
@@ -173,6 +191,22 @@ class Results:
             'time4': self.time4,
             'time6': self.time6,
             'time8': self.time8,
+            'interior_percentage': self.interior_percentage,
+            'reduced_activation_checks': self.reduced_activation_checks,
+            'reduced_active_iterations': self.reduced_active_iterations,
+            'reduced_first_iteration': self.reduced_first_iteration,
+            'reduced_rebuilds': self.reduced_rebuilds,
+            'reduced_build_time': self.reduced_build_time,
+            'reduced_last_trigger_iteration': self.reduced_last_trigger_iteration,
+            'reduced_last_free_ratio': self.reduced_last_free_ratio,
+            'reduced_last_trigger_residual': self.reduced_last_trigger_residual,
+            'reduced_last_trigger_sigma': self.reduced_last_trigger_sigma,
+            'reduced_last_free_columns': self.reduced_last_free_columns,
+            'reduced_active_iteration_ratio': self.reduced_active_iteration_ratio,
+            'reduced_average_column_ratio': self.reduced_average_column_ratio,
+            'reduced_average_nnz_ratio': self.reduced_average_nnz_ratio,
+            'reduced_minimum_column_ratio': self.reduced_minimum_column_ratio,
+            'reduced_minimum_nnz_ratio': self.reduced_minimum_nnz_ratio,
         }
     
     @classmethod
@@ -185,6 +219,7 @@ class Results:
         results.residuals = core_results.residuals
         results.iter = core_results.iter
         results.time = core_results.time
+        results.folding_time = core_results.folding_time
         results.timing = Timing.from_core(core_results.timing)
         results.iter4 = core_results.iter4
         results.iter6 = core_results.iter6
@@ -192,6 +227,27 @@ class Results:
         results.time4 = core_results.time4
         results.time6 = core_results.time6
         results.time8 = core_results.time8
+        results.interior_percentage = core_results.interior_percentage
+        results.reduced_activation_checks = core_results.reduced_activation_checks
+        results.reduced_active_iterations = core_results.reduced_active_iterations
+        results.reduced_first_iteration = core_results.reduced_first_iteration
+        results.reduced_rebuilds = core_results.reduced_rebuilds
+        results.reduced_build_time = core_results.reduced_build_time
+        results.reduced_last_trigger_iteration = (
+            core_results.reduced_last_trigger_iteration)
+        results.reduced_last_free_ratio = core_results.reduced_last_free_ratio
+        results.reduced_last_trigger_residual = (
+            core_results.reduced_last_trigger_residual)
+        results.reduced_last_trigger_sigma = core_results.reduced_last_trigger_sigma
+        results.reduced_last_free_columns = core_results.reduced_last_free_columns
+        results.reduced_active_iteration_ratio = (
+            core_results.reduced_active_iteration_ratio)
+        results.reduced_average_column_ratio = (
+            core_results.reduced_average_column_ratio)
+        results.reduced_average_nnz_ratio = core_results.reduced_average_nnz_ratio
+        results.reduced_minimum_column_ratio = (
+            core_results.reduced_minimum_column_ratio)
+        results.reduced_minimum_nnz_ratio = core_results.reduced_minimum_nnz_ratio
         
         # Convert solution vectors to numpy arrays
         if hasattr(core_results, 'x') and len(core_results.x) > 0:

@@ -17,6 +17,9 @@ All notable public changes to HPR-LP-C are recorded here. The project follows
   H100, A100, and GeForce RTX 30/40/50 series GPUs select `sm_100`, `sm_90`,
   `sm_80`, `sm_86`, `sm_89`, and `sm_120`, respectively, while `GPU_SM`
   remains available as an explicit override.
+- Changed the Python dataset runner to collect complete timing, convergence,
+  and reduced-matrix statistics from native result objects in persistent
+  per-GPU worker processes instead of parsing filtered console output.
 - Renamed generic CUDA launch macros that collided with CUDA 13.0
   `cooperative_groups` internals.
 
