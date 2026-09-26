@@ -28,6 +28,19 @@ void print_backend_autotune_diagnostics(HPRLP_workspace_gpu *ws,
         std::cout << std::endl;
         std::cout << "  uniform unit sign: "
                   << static_cast<int>(ws->uniform_unit_sign) << std::endl;
+        if (ws->A != nullptr && ws->A->rowPtr64 != nullptr) {
+            const char *mode = "numeric";
+            if (ws->inverse_row_norm != nullptr &&
+                ws->inverse_col_norm != nullptr) {
+                if (ws->uniform_unit_sign != 0) mode = "unit";
+                else if (ws->wide_signed_unit_ready) mode = "signed-unit";
+            }
+            std::cout << "  wide fused coefficient mode: " << mode
+                      << " (64-bit CSR positions)" << std::endl;
+            std::cout << "  wide packed/structured plans: unavailable "
+                         "(int32 entry metadata or shape limits)"
+                      << std::endl;
+        }
         std::cout << "  signed packed operator: "
                   << (ws->signed_unit_operator_ready ? "enabled" : "disabled");
         if (ws->signed_unit_operator_ready &&

@@ -18,6 +18,7 @@
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -136,6 +137,12 @@ void free_gpu_presolver_handle_resources(GpuPresolverHandle *handle) {
 }
 
 gp::DeviceCsrMatrix upload_csr(const sparseMatrix *matrix, const char *name) {
+    if (matrix == nullptr || matrix->rowPtr == nullptr ||
+        matrix->colIndex == nullptr || matrix->numElements < 0 ||
+        matrix->numElements > std::numeric_limits<std::int32_t>::max()) {
+        throw std::runtime_error(
+            "GPU-Presolver-C requires 32-bit CSR offsets and nnz");
+    }
     gp::DeviceCsrMatrix out;
     out.rows = static_cast<std::int32_t>(matrix->row);
     out.cols = static_cast<std::int32_t>(matrix->col);
@@ -152,7 +159,7 @@ gp::DeviceCsrMatrix upload_csr(const sparseMatrix *matrix, const char *name) {
 void upload_hprlp_model(const LP_info_cpu *model, gp::LPInfoGpu *out) {
     out->A = upload_csr(model->A, "cudaMalloc/copy GPU presolver A");
 
-    sparseMatrix at_host;
+    sparseMatrix at_host{};
     CSR_transpose_host(*(model->A), &at_host);
     out->AT = upload_csr(&at_host, "cudaMalloc/copy GPU presolver AT");
     std::free(at_host.value);
@@ -218,6 +225,7 @@ bool copy_reduced_lp_to_hprlp(const gp::LPInfoGpu &lp,
         static_cast<int>(lp.A.cols),
         static_cast<int>(lp.A.nnz),
         const_cast<int*>(row_ptr.data()),
+        nullptr,
         const_cast<int*>(col_idx.data()),
         const_cast<HPRLP_FLOAT*>(values.data()),
     };

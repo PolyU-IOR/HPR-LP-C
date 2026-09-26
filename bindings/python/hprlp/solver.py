@@ -11,12 +11,14 @@ from .results import Results, BatchedResults
 
 
 def _ensure_contiguous_int32(arr):
-    """Ensure array is contiguous int32"""
-    if not isinstance(arr, np.ndarray):
-        arr = np.array(arr, dtype=np.int32)
-    if arr.dtype != np.int32:
-        arr = arr.astype(np.int32)
-    return np.ascontiguousarray(arr)
+    """Convert integer indexes to contiguous int32 without truncation."""
+    arr = np.asarray(arr)
+    if not np.issubdtype(arr.dtype, np.integer):
+        raise TypeError("Sparse indexes must be integers")
+    bounds = np.iinfo(np.int32)
+    if arr.size and (int(np.min(arr)) < bounds.min or int(np.max(arr)) > bounds.max):
+        raise ValueError("Sparse index exceeds int32 range")
+    return np.ascontiguousarray(arr, dtype=np.int32)
 
 
 def _ensure_contiguous_float64(arr):
@@ -187,6 +189,9 @@ class HPRLPSolver:
             raise ValueError("C must have shape (n, batch_size)")
         B = C.shape[1]
         m, n = A.shape
+        if m > np.iinfo(np.int32).max or n > np.iinfo(np.int32).max:
+            raise ValueError(
+                "m or n exceeds INT32_MAX; HPR-LP-C model was not created")
         base_AL = np.zeros(m, dtype=np.float64)
         base_AU = np.zeros(m, dtype=np.float64)
         base_l = np.zeros(n, dtype=np.float64)

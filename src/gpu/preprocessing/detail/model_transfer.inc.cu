@@ -876,7 +876,8 @@ void build_bound_types(const HPRLP_FLOAT *lower_dev,
 
 }
 
-void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu) {
+void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu,
+                           bool for_batched) {
     int m = lp_info_cpu->m;
     int n = lp_info_cpu->n;
 
@@ -915,6 +916,76 @@ void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_
         HPRLPGridSlackLaplacianShape{};
     lp_info_gpu->unit_coltile = nullptr;
     lp_info_gpu->signed_unit_operator = nullptr;
+
+    const bool large_offsets =
+        hprlp_sparse_has_64bit_offsets(lp_info_cpu->A);
+    if (large_offsets) {
+        // Packed metadata below still stores int32 entry positions. A
+        // separate wide fused path can recognize uniform/signed unit values
+        // without constructing any of those packed entry arrays.
+        const bool classify_wide_fused = !for_batched &&
+            m <= 1000000 && n <= 1000000;
+        lp_info_gpu->uniform_unit_sign = classify_wide_fused
+            ? static_cast<int8_t>(hprlp_uniform_unit_sign(
+                  lp_info_cpu->A->value,
+                  static_cast<std::size_t>(lp_info_cpu->A->numElements)))
+            : 0;
+        lp_info_gpu->all_positive_unit_coefficients =
+            lp_info_gpu->uniform_unit_sign > 0;
+        lp_info_gpu->mixed_signed_unit_coefficients =
+            classify_wide_fused && lp_info_gpu->uniform_unit_sign == 0 &&
+            hprlp_mixed_signed_unit(
+                lp_info_cpu->A->value,
+                static_cast<std::size_t>(lp_info_cpu->A->numElements));
+        lp_info_gpu->all_zero_lower_unbounded_variables = false;
+        lp_info_gpu->signed_state_plan_ready = false;
+
+        lp_info_gpu->A = new sparseMatrix{};
+        // SpMVOp (CUDA 13.3+) can use compact 32-bit column IDs. Batched
+        // SpMM and older SpMV need matching 64-bit offsets and IDs.
+        const bool mixed_spmvop_columns =
+            HPRLP_HAS_CUSPARSE_SPMVOP && !for_batched;
+        transfer_CSR_matrix(
+            lp_info_cpu->A, lp_info_gpu->A, mixed_spmvop_columns);
+        if (!build_stable_device_transpose(
+                lp_info_gpu->A, &lp_info_gpu->AT)) {
+            throw std::runtime_error(
+                "failed to build 64-bit device transpose");
+        }
+
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &lp_info_gpu->AL, static_cast<std::size_t>(m) *
+                sizeof(HPRLP_FLOAT)));
+        CUDA_CHECK(cudaMemcpy(lp_info_gpu->AL, lp_info_cpu->AL,
+            static_cast<std::size_t>(m) * sizeof(HPRLP_FLOAT),
+            cudaMemcpyHostToDevice));
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &lp_info_gpu->AU, static_cast<std::size_t>(m) *
+                sizeof(HPRLP_FLOAT)));
+        CUDA_CHECK(cudaMemcpy(lp_info_gpu->AU, lp_info_cpu->AU,
+            static_cast<std::size_t>(m) * sizeof(HPRLP_FLOAT),
+            cudaMemcpyHostToDevice));
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &lp_info_gpu->l, static_cast<std::size_t>(n) *
+                sizeof(HPRLP_FLOAT)));
+        CUDA_CHECK(cudaMemcpy(lp_info_gpu->l, lp_info_cpu->l,
+            static_cast<std::size_t>(n) * sizeof(HPRLP_FLOAT),
+            cudaMemcpyHostToDevice));
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &lp_info_gpu->u, static_cast<std::size_t>(n) *
+                sizeof(HPRLP_FLOAT)));
+        CUDA_CHECK(cudaMemcpy(lp_info_gpu->u, lp_info_cpu->u,
+            static_cast<std::size_t>(n) * sizeof(HPRLP_FLOAT),
+            cudaMemcpyHostToDevice));
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &lp_info_gpu->c, static_cast<std::size_t>(n) *
+                sizeof(HPRLP_FLOAT)));
+        CUDA_CHECK(cudaMemcpy(lp_info_gpu->c, lp_info_cpu->c,
+            static_cast<std::size_t>(n) * sizeof(HPRLP_FLOAT),
+            cudaMemcpyHostToDevice));
+        return;
+    }
+
     lp_info_gpu->uniform_unit_sign = static_cast<int8_t>(
         hprlp_uniform_unit_sign(
             lp_info_cpu->A->value,

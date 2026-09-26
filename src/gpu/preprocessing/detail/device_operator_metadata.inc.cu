@@ -174,10 +174,11 @@ void hprlp_build_device_signed_entries(
     int *invalid = hprlp_allocate_device_metadata<int>(1);
     CUDA_CHECK(cudaMemset(invalid, 0, sizeof(int)));
     const int threads = 256;
+    const int int_nonzeros = static_cast<int>(matrix->numElements);
     const int blocks = std::min(65535,
-        (matrix->numElements + threads - 1) / threads);
+        (int_nonzeros + threads - 1) / threads);
     hprlp_pack_signed_unit_kernel<<<blocks, threads>>>(
-        matrix->colIndex, matrix->value, matrix->numElements, input_count,
+        matrix->colIndex, matrix->value, int_nonzeros, input_count,
         uses_u16, split_u16, *entries_u16, *entries_u32,
         *split_indices_u16, *split_negative_u8, invalid);
     CUDA_CHECK(cudaGetLastError());

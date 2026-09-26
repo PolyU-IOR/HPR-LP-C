@@ -23,12 +23,14 @@ void prepare_spmv(HPRLP_workspace_gpu *workspace) {
 
     // CSR Sparse Matrix Descriptor
     cusparseCreateCsr(&workspace->spmv_A->A_cusparseDescr, workspace->m, workspace->n, workspace->A->numElements,
-                workspace->A->rowPtr, workspace->A->colIndex, workspace->A->value,
-                CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+                hprlp_sparse_row_offsets(workspace->A), hprlp_sparse_column_indices(workspace->A), workspace->A->value,
+                hprlp_sparse_has_64bit_offsets(workspace->A) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+                hprlp_sparse_has_64bit_column_indices(workspace->A) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
     cusparseCreateCsr(&workspace->spmv_AT->AT_cusparseDescr, workspace->n, workspace->m, workspace->AT->numElements,
-                workspace->AT->rowPtr, workspace->AT->colIndex, workspace->AT->value,
-                CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+                hprlp_sparse_row_offsets(workspace->AT), hprlp_sparse_column_indices(workspace->AT), workspace->AT->value,
+                hprlp_sparse_has_64bit_offsets(workspace->AT) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+                hprlp_sparse_has_64bit_column_indices(workspace->AT) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
 
     CUSPARSE_CHECK(hprlp_prepare_spmvop(
@@ -68,6 +70,10 @@ void analyze_spmv_pattern(HPRLP_workspace_gpu *workspace, const HPRLP_parameters
         build_bound_types(workspace->AL, workspace->AU, m,
                           &workspace->y_bound_type, workspace->stream);
     }
+    // The wide fused kernels iterate int64 CSR positions directly. Legacy
+    // row buckets, segmented tiles and packed plans encode entry positions
+    // in int32 and must not inspect this matrix.
+    if (hprlp_sparse_has_64bit_offsets(workspace->A)) return;
     if (!param->CUSPARSE_spmv) {
         build_row_buckets(workspace->A, &workspace->A_rows_short, &workspace->num_A_rows_short,
                           &workspace->A_rows_medium, &workspace->num_A_rows_medium,

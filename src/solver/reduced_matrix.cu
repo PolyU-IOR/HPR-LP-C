@@ -3,8 +3,11 @@
 #include "HPRLP.h"
 #include "cuda_kernels/backends/simple/simple_update_kernels.cuh"
 #include "cuda_kernels/backends/detail/update_device_helpers.cuh"
+#include "cuda_kernels/backends/generic/wide_fused_kernels.cuh"
 #include "cuda_kernels/cuda_check.h"
 #include "cuda_kernels/shared/vector_kernels.cuh"
+#include "gpu/memory/compressible_memory.h"
+#include "gpu/preprocessing/preprocess.h"
 #include "gpu/preprocessing/policies/row_bucket_policy.h"
 #include "solver/graph/graph_batch_policy.h"
 #include "solver/backends/signed_unit_launcher.cuh"
@@ -923,17 +926,26 @@ __global__ void release_x_bar_mask_kernel(
     }
 }
 
+template <typename SelectedOffset, typename OriginalOffset>
 __global__ void selected_csr_row_lengths_kernel(
-    int *selected_row_ptr,
+    SelectedOffset *selected_row_ptr,
     const int *selected_to_original,
-    const int *original_row_ptr,
+    const OriginalOffset *original_row_ptr,
     int selected_count) {
     const int selected_row = blockIdx.x * blockDim.x + threadIdx.x;
     if (selected_row >= selected_count) return;
     const int original_row = selected_to_original[selected_row];
-    selected_row_ptr[selected_row + 1] =
+    selected_row_ptr[selected_row + 1] = static_cast<SelectedOffset>(
         original_row_ptr[original_row + 1] -
-        original_row_ptr[original_row];
+        original_row_ptr[original_row]);
+}
+
+__global__ void narrow_reduced_offsets_kernel(
+    int *destination, const std::int64_t *source, int count) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < count) {
+        destination[index] = static_cast<int>(source[index]);
+    }
 }
 
 __global__ void build_compact_row_buckets_kernel(
@@ -1173,26 +1185,28 @@ __global__ void fixed_values_from_mask_kernel(
         (mask[index] == HPRLP_XBAR_AT_UPPER ? upper[index] : 0.0);
 }
 
+template <typename ReducedOffset, typename OriginalOffset,
+          typename OriginalIndex, typename ReducedIndex>
 __global__ void copy_selected_csr_rows_kernel(
-    int *reduced_columns,
+    ReducedIndex *reduced_columns,
     HPRLP_FLOAT *reduced_values,
-    const int *reduced_row_ptr,
+    const ReducedOffset *reduced_row_ptr,
     const int *free_to_original,
-    const int *original_row_ptr,
-    const int *original_columns,
+    const OriginalOffset *original_row_ptr,
+    const OriginalIndex *original_columns,
     const HPRLP_FLOAT *original_values,
     int free_count) {
     const int reduced_row = blockIdx.x;
     if (reduced_row >= free_count) return;
     const int original_row = free_to_original[reduced_row];
-    const int original_begin = original_row_ptr[original_row];
-    const int original_end = original_row_ptr[original_row + 1];
-    const int reduced_begin = reduced_row_ptr[reduced_row];
-    for (int offset = threadIdx.x;
+    const std::int64_t original_begin = original_row_ptr[original_row];
+    const std::int64_t original_end = original_row_ptr[original_row + 1];
+    const std::int64_t reduced_begin = reduced_row_ptr[reduced_row];
+    for (std::int64_t offset = threadIdx.x;
          original_begin + offset < original_end;
          offset += blockDim.x) {
-        reduced_columns[reduced_begin + offset] =
-            original_columns[original_begin + offset];
+        reduced_columns[reduced_begin + offset] = static_cast<ReducedIndex>(
+            original_columns[original_begin + offset]);
         reduced_values[reduced_begin + offset] =
             original_values[original_begin + offset];
     }
@@ -2355,9 +2369,11 @@ void ensure_device_byte_capacity(
 
 void free_sparse_matrix(sparseMatrix *matrix) {
     if (matrix == nullptr) return;
-    cudaFree(matrix->rowPtr);
-    cudaFree(matrix->colIndex);
-    cudaFree(matrix->value);
+    hprlp_device_free(matrix->rowPtr);
+    hprlp_device_free(matrix->rowPtr64);
+    hprlp_device_free(matrix->colIndex);
+    hprlp_device_free(matrix->colIndex64);
+    hprlp_device_free(matrix->value);
     *matrix = sparseMatrix{};
 }
 
@@ -2365,8 +2381,12 @@ void free_sparse_matrix_async(
     sparseMatrix *matrix, cudaStream_t stream) {
     if (matrix == nullptr) return;
     if (matrix->rowPtr) CUDA_CHECK(cudaFreeAsync(matrix->rowPtr, stream));
+    if (matrix->rowPtr64) CUDA_CHECK(cudaFreeAsync(matrix->rowPtr64, stream));
     if (matrix->colIndex) {
         CUDA_CHECK(cudaFreeAsync(matrix->colIndex, stream));
+    }
+    if (matrix->colIndex64) {
+        CUDA_CHECK(cudaFreeAsync(matrix->colIndex64, stream));
     }
     if (matrix->value) CUDA_CHECK(cudaFreeAsync(matrix->value, stream));
     *matrix = sparseMatrix{};
@@ -3266,8 +3286,8 @@ void profile_reduced_row_backend_candidates(
 
 void prepare_reduced_row_spmv_pair(
     HPRLP_workspace_gpu *workspace,
-    const sparseMatrix &row_A,
-    const sparseMatrix &row_AT,
+    sparseMatrix &row_A,
+    sparseMatrix &row_AT,
     HPRLP_FLOAT *row_Ax,
     HPRLP_FLOAT *row_y,
     int row_y_count,
@@ -3299,8 +3319,12 @@ void prepare_reduced_row_spmv_pair(
             CUDA_R_64F), "create row-reduced Ax");
         check_cusparse(cusparseCreateCsr(
             &a.A_cusparseDescr, row_A.row, row_A.col,
-            row_A.numElements, row_A.rowPtr, row_A.colIndex, row_A.value,
-            CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+            row_A.numElements, hprlp_sparse_row_offsets(&row_A),
+            hprlp_sparse_column_indices(&row_A), row_A.value,
+            hprlp_sparse_has_64bit_offsets(&row_A)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+            hprlp_sparse_has_64bit_column_indices(&row_A)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
             CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F),
             "create row-reduced A");
         check_cusparse(hprlp_prepare_spmvop(
@@ -3318,8 +3342,12 @@ void prepare_reduced_row_spmv_pair(
             CUDA_R_64F), "create row-reduced ATy");
         check_cusparse(cusparseCreateCsr(
             &at.AT_cusparseDescr, row_AT.row, row_AT.col,
-            row_AT.numElements, row_AT.rowPtr, row_AT.colIndex,
-            row_AT.value, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+            row_AT.numElements, hprlp_sparse_row_offsets(&row_AT),
+            hprlp_sparse_column_indices(&row_AT), row_AT.value,
+            hprlp_sparse_has_64bit_offsets(&row_AT)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+            hprlp_sparse_has_64bit_column_indices(&row_AT)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
             CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F),
             "create row-reduced AT");
         check_cusparse(hprlp_prepare_spmvop(
@@ -3347,6 +3375,12 @@ void prepare_reduced_row_spmv(
              !state->row_use_packed_dictionary_x),
         &state->row_spmv_A, &state->row_spmv_AT);
 }
+
+bool build_reduced_row_workspace_from_wide_source(
+    HPRLP_workspace_gpu *workspace,
+    HPRLP_reduced_matrix_state *state,
+    const HPRLP_parameters *parameters, int iteration,
+    std::chrono::steady_clock::time_point started);
 
 bool build_reduced_row_workspace(
     HPRLP_workspace_gpu *workspace,
@@ -3382,6 +3416,10 @@ bool build_reduced_row_workspace(
             state->row_active_to_original, workspace->m);
     }
 
+    if (hprlp_sparse_has_64bit_offsets(workspace->A)) {
+        return build_reduced_row_workspace_from_wide_source(
+            workspace, state, parameters, iteration, start);
+    }
     state->row_A.row = state->row_active_count;
     state->row_A.col = workspace->n;
     allocate_device(
@@ -3917,6 +3955,38 @@ void enqueue_reduced_row_iteration_updates(
             ? state->row_delta_y : workspace->y;
         const int *const delta_row_ptr = state->row_delta_count > 0
             ? state->row_delta_AT.rowPtr : nullptr;
+        if (workspace->A->rowPtr64 != nullptr) {
+            if (state->row_AT.rowPtr64 != nullptr) {
+                if (state->row_AT.colIndex64 != nullptr) {
+                    hprlp_wide_fused_x_kernel<<<workspace->n, 256, 0,
+                        workspace->stream>>>(
+                        workspace->x, workspace->x_hat, workspace->l,
+                        workspace->u, workspace->x_bound_type, workspace->c,
+                        workspace->last_x, base_y, state->row_AT.rowPtr64,
+                        state->row_AT.colIndex64, state->row_AT.value,
+                        workspace->Halpern_params, workspace->halpern_factors,
+                        nullptr, nullptr, 0, 0, workspace->n);
+                } else {
+                    hprlp_wide_fused_x_kernel<<<workspace->n, 256, 0,
+                        workspace->stream>>>(
+                        workspace->x, workspace->x_hat, workspace->l,
+                        workspace->u, workspace->x_bound_type, workspace->c,
+                        workspace->last_x, base_y, state->row_AT.rowPtr64,
+                        state->row_AT.colIndex, state->row_AT.value,
+                        workspace->Halpern_params, workspace->halpern_factors,
+                        nullptr, nullptr, 0, 0, workspace->n);
+                }
+            } else {
+                hprlp_wide_fused_x_kernel<<<workspace->n, 256, 0,
+                    workspace->stream>>>(
+                    workspace->x, workspace->x_hat, workspace->l,
+                    workspace->u, workspace->x_bound_type, workspace->c,
+                    workspace->last_x, base_y, state->row_AT.rowPtr,
+                    state->row_AT.colIndex, state->row_AT.value,
+                    workspace->Halpern_params, workspace->halpern_factors,
+                    nullptr, nullptr, 0, 0, workspace->n);
+            }
+        } else {
         if (state->row_AT_short_count > 0) {
             fused_reduced_row_x_short_kernel<<<
                 HPRLP_NUM_BLOCKS(state->row_AT_short_count), HPRLP_NUM_THREADS, 0,
@@ -3944,6 +4014,7 @@ void enqueue_reduced_row_iteration_updates(
                 state->row_delta_AT.value, workspace->Halpern_params,
                 workspace->halpern_factors, state->row_AT_rows_warp,
                 state->row_AT_warp_count);
+        }
         }
     } else {
         CUSPARSE_spmvop_AT &at = state->row_spmv_AT;
@@ -4069,6 +4140,45 @@ void enqueue_reduced_row_iteration_updates(
             ? state->row_last_y : workspace->last_y;
         const int *const active_to_original = state->use_compact_row_y
             ? nullptr : state->row_active_to_original;
+        if (workspace->A->rowPtr64 != nullptr) {
+            if (state->row_base_count > 0) {
+                if (state->row_A.rowPtr64 != nullptr) {
+                    if (state->row_A.colIndex64 != nullptr) {
+                        hprlp_wide_fused_y_kernel<<<
+                            state->row_base_count, 256, 0,
+                            workspace->stream>>>(
+                            y, lower, upper, state->row_bound_type,
+                            last_y, workspace->x_hat,
+                            state->row_A.rowPtr64,
+                            state->row_A.colIndex64, state->row_A.value,
+                            workspace->Halpern_params,
+                            workspace->halpern_factors, nullptr, nullptr,
+                            nullptr, 0, 0, state->row_base_count);
+                    } else {
+                        hprlp_wide_fused_y_kernel<<<
+                            state->row_base_count, 256, 0,
+                            workspace->stream>>>(
+                            y, lower, upper, state->row_bound_type,
+                            last_y, workspace->x_hat,
+                            state->row_A.rowPtr64,
+                            state->row_A.colIndex, state->row_A.value,
+                            workspace->Halpern_params,
+                            workspace->halpern_factors, nullptr, nullptr,
+                            nullptr, 0, 0, state->row_base_count);
+                    }
+                } else {
+                    hprlp_wide_fused_y_kernel<<<
+                        state->row_base_count, 256, 0,
+                        workspace->stream>>>(
+                        y, lower, upper, state->row_bound_type,
+                        last_y, workspace->x_hat, state->row_A.rowPtr,
+                        state->row_A.colIndex, state->row_A.value,
+                        workspace->Halpern_params,
+                        workspace->halpern_factors, nullptr, nullptr,
+                        nullptr, 0, 0, state->row_base_count);
+                }
+            }
+        } else {
         if (state->row_A_short_count > 0) {
             fused_reduced_row_y_short_kernel<<<
                 HPRLP_NUM_BLOCKS(state->row_A_short_count), HPRLP_NUM_THREADS, 0,
@@ -4088,6 +4198,7 @@ void enqueue_reduced_row_iteration_updates(
                 state->row_A.value, active_to_original,
                 workspace->Halpern_params, workspace->halpern_factors,
                 state->row_A_rows_warp, state->row_A_warp_count);
+        }
         }
     } else {
         CUSPARSE_spmvop_A &a = state->row_spmv_A;
@@ -4557,8 +4668,12 @@ void prepare_reduced_spmv(
             CUDA_R_64F), "create reduced Ax");
         check_cusparse(cusparseCreateCsr(
             &a.A_cusparseDescr, state->A.row, state->A.col,
-            state->A.numElements, state->A.rowPtr, state->A.colIndex,
-            state->A.value, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+            state->A.numElements, hprlp_sparse_row_offsets(&state->A),
+            hprlp_sparse_column_indices(&state->A), state->A.value,
+            hprlp_sparse_has_64bit_offsets(&state->A)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+            hprlp_sparse_has_64bit_column_indices(&state->A)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
             CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F), "create reduced A");
         check_cusparse(hprlp_prepare_spmvop(
             a.cusparseHandle, a.A_cusparseDescr, a.x_hat_cusparseDescr,
@@ -4577,8 +4692,12 @@ void prepare_reduced_spmv(
             CUDA_R_64F), "create reduced ATy");
         check_cusparse(cusparseCreateCsr(
             &at.AT_cusparseDescr, state->AT.row, state->AT.col,
-            state->AT.numElements, state->AT.rowPtr, state->AT.colIndex,
-            state->AT.value, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+            state->AT.numElements, hprlp_sparse_row_offsets(&state->AT),
+            hprlp_sparse_column_indices(&state->AT), state->AT.value,
+            hprlp_sparse_has_64bit_offsets(&state->AT)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+            hprlp_sparse_has_64bit_column_indices(&state->AT)
+                ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
             CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F), "create reduced AT");
         check_cusparse(hprlp_prepare_spmvop(
             at.cusparseHandle, at.AT_cusparseDescr,
@@ -5103,6 +5222,201 @@ void build_device_empty_short_buckets(
     }
 }
 
+// Build selected columns from a wide source without truncating a source or
+// destination entry position. The reduced matrix chooses its own offset width.
+void build_selected_csr_from_wide_source(
+    HPRLP_workspace_gpu *workspace,
+    HPRLP_reduced_matrix_state *state,
+    const sparseMatrix *source,
+    const int *selected_to_original,
+    int selected_count,
+    sparseMatrix *selected,
+    sparseMatrix *transposed) {
+    if (!source || !source->rowPtr64) {
+        throw std::runtime_error("wide reduced source has no int64 offsets");
+    }
+    selected->row = selected_count;
+    selected->col = source->col;
+    std::int64_t *wide_offsets = nullptr;
+    allocate_device(
+        &wide_offsets, static_cast<std::size_t>(selected_count) + 1);
+    CUDA_CHECK(cudaMemsetAsync(
+        wide_offsets, 0, sizeof(std::int64_t), workspace->stream));
+    if (selected_count > 0) {
+        selected_csr_row_lengths_kernel<<<
+            HPRLP_NUM_BLOCKS(selected_count), HPRLP_NUM_THREADS, 0,
+            workspace->stream>>>(
+            wide_offsets, selected_to_original, source->rowPtr64,
+            selected_count);
+        std::size_t scan_bytes = 0;
+        CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+            nullptr, scan_bytes, wide_offsets + 1, wide_offsets + 1,
+            selected_count, workspace->stream));
+        ensure_device_byte_capacity(
+            &state->construction_temp,
+            &state->construction_temp_capacity, scan_bytes);
+        CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+            state->construction_temp, scan_bytes,
+            wide_offsets + 1, wide_offsets + 1,
+            selected_count, workspace->stream));
+    }
+    std::int64_t reduced_nnz = 0;
+    CUDA_CHECK(cudaMemcpyAsync(
+        &reduced_nnz, wide_offsets + selected_count,
+        sizeof(reduced_nnz), cudaMemcpyDeviceToHost, workspace->stream));
+    CUDA_CHECK(cudaStreamSynchronize(workspace->stream));
+    if (reduced_nnz < 0 || reduced_nnz > source->numElements) {
+        cudaFree(wide_offsets);
+        throw std::runtime_error("invalid wide reduced nnz");
+    }
+    selected->numElements = reduced_nnz;
+    const bool wide_reduced =
+        reduced_nnz > std::numeric_limits<int>::max();
+    const bool wide_column_ids = wide_reduced &&
+        (source->colIndex64 != nullptr || !HPRLP_HAS_CUSPARSE_SPMVOP);
+    if (wide_reduced) {
+        selected->rowPtr64 = wide_offsets;
+    } else {
+        allocate_device(
+            &selected->rowPtr,
+            static_cast<std::size_t>(selected_count) + 1);
+        narrow_reduced_offsets_kernel<<<
+            HPRLP_NUM_BLOCKS(selected_count + 1), HPRLP_NUM_THREADS,
+            0, workspace->stream>>>(
+            selected->rowPtr, wide_offsets, selected_count + 1);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaFree(wide_offsets));
+    }
+    allocate_device(&selected->value,
+                    static_cast<std::size_t>(reduced_nnz));
+    if (wide_column_ids) {
+        allocate_device(&selected->colIndex64,
+                        static_cast<std::size_t>(reduced_nnz));
+    } else {
+        allocate_device(&selected->colIndex,
+                        static_cast<std::size_t>(reduced_nnz));
+    }
+    if (selected_count > 0 && reduced_nnz > 0) {
+        const dim3 grid(static_cast<unsigned>(selected_count));
+        if (wide_column_ids) {
+            if (source->colIndex64) {
+                copy_selected_csr_rows_kernel<<<
+                    grid, 256, 0, workspace->stream>>>(
+                    selected->colIndex64, selected->value,
+                    selected->rowPtr64, selected_to_original,
+                    source->rowPtr64, source->colIndex64, source->value,
+                    selected_count);
+            } else {
+                copy_selected_csr_rows_kernel<<<
+                    grid, 256, 0, workspace->stream>>>(
+                    selected->colIndex64, selected->value,
+                    selected->rowPtr64, selected_to_original,
+                    source->rowPtr64, source->colIndex, source->value,
+                    selected_count);
+            }
+        } else if (wide_reduced) {
+            copy_selected_csr_rows_kernel<<<
+                grid, 256, 0, workspace->stream>>>(
+                selected->colIndex, selected->value,
+                selected->rowPtr64, selected_to_original,
+                source->rowPtr64, source->colIndex, source->value,
+                selected_count);
+        } else if (source->colIndex64) {
+            copy_selected_csr_rows_kernel<<<
+                grid, 256, 0, workspace->stream>>>(
+                selected->colIndex, selected->value,
+                selected->rowPtr, selected_to_original,
+                source->rowPtr64, source->colIndex64, source->value,
+                selected_count);
+        } else {
+            copy_selected_csr_rows_kernel<<<
+                grid, 256, 0, workspace->stream>>>(
+                selected->colIndex, selected->value,
+                selected->rowPtr, selected_to_original,
+                source->rowPtr64, source->colIndex, source->value,
+                selected_count);
+        }
+        CUDA_CHECK(cudaGetLastError());
+    }
+    if (wide_reduced) {
+        sparseMatrix *transpose = nullptr;
+        if (!build_stable_device_transpose(selected, &transpose) ||
+            transpose == nullptr) {
+            throw std::runtime_error("wide reduced transpose failed");
+        }
+        *transposed = *transpose;
+        delete transpose;
+    } else {
+        transpose_csr(
+            *selected, transposed, workspace->stream,
+            state->transpose_handle, &state->construction_temp,
+            &state->construction_temp_capacity);
+    }
+}
+#include "detail/reduced_wide_row.inc.cu"
+
+bool finish_selected_csr_from_wide_source(
+    HPRLP_workspace_gpu *workspace,
+    HPRLP_reduced_matrix_state *state,
+    const HPRLP_parameters *parameters, int iteration,
+    std::chrono::steady_clock::time_point started) {
+    // The retained CSR exceeds int32. Its fused kernels read int64 CSR
+    // positions directly and need no packed entry-position metadata.
+    state->use_fused_x = parameters != nullptr &&
+        !parameters->CUSPARSE_spmv;
+    state->use_fused_y = state->use_fused_x;
+    workspace->reduced_backend_autotune_done = true;
+    workspace->reduced_use_fused_x = false;
+    workspace->reduced_use_fused_y = false;
+    state->profile_done = true;
+
+    allocate_device(&state->row_fixed_shift, workspace->m);
+    allocate_device(&state->x, state->free_count);
+    allocate_device(&state->x_bar, state->free_count);
+    allocate_device(&state->x_hat, state->free_count);
+    allocate_device(&state->last_x, state->free_count);
+    allocate_device(&state->lower, state->free_count);
+    allocate_device(&state->upper, state->free_count);
+    allocate_device(&state->objective, state->free_count);
+    allocate_device(&state->bound_type, state->free_count);
+    allocate_device(&state->ATy, state->free_count);
+    allocate_device(&state->Ax, workspace->m);
+    if (state->free_count > 0) {
+        gather_reduced_state_kernel<<<
+            HPRLP_NUM_BLOCKS(state->free_count), HPRLP_NUM_THREADS,
+            0, workspace->stream>>>(
+            state->x, state->x_bar, state->x_hat, state->last_x,
+            state->lower, state->upper, state->objective,
+            state->bound_type, workspace->x, workspace->x_bar,
+            workspace->x_hat, workspace->last_x, workspace->l,
+            workspace->u, workspace->c, workspace->x_bound_type,
+            state->free_to_original, state->free_count);
+    }
+    compute_fixed_shift(workspace, state);
+    scatter_fixed_bounds_kernel<<<
+        HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS,
+        0, workspace->stream>>>(
+        workspace->x, workspace->x_bar, workspace->x_hat,
+        workspace->last_x, workspace->l, workspace->u,
+        state->x_bar_mask, workspace->n);
+    prepare_reduced_spmv(workspace, state);
+    CUDA_CHECK(cudaStreamSynchronize(workspace->stream));
+    state->rebuilds += 1;
+    state->built = true;
+    state->last_rebuild_iteration = iteration;
+    state->last_free_columns = state->free_count;
+    state->build_time += std::chrono::duration<HPRLP_FLOAT>(
+        std::chrono::steady_clock::now() - started).count();
+    std::cout << "  reduced adaptive CSR: source_nnz="
+              << workspace->A->numElements
+              << " reduced_nnz=" << state->AT.numElements
+              << " offset_bits="
+              << (state->AT.rowPtr64 ? 64 : 32)
+              << " backend="
+              << (state->use_fused_x ? "wide-fused" : "cusparse")
+              << std::endl;
+    return true;
+}
 bool build_reduced_workspace(
     HPRLP_workspace_gpu *workspace,
     HPRLP_reduced_matrix_state *state,
@@ -5151,6 +5465,13 @@ bool build_reduced_workspace(
             cudaMemcpyDeviceToDevice, workspace->stream));
     }
 
+    if (hprlp_sparse_has_64bit_offsets(workspace->AT)) {
+        build_selected_csr_from_wide_source(
+            workspace, state, workspace->AT,
+            state->free_to_original, state->free_count,
+            &state->AT, &state->A);
+        state->base_reduced_nnz = state->AT.numElements;
+    } else {
     state->AT.row = state->free_count;
     state->AT.col = workspace->m;
     allocate_device(
@@ -5200,6 +5521,15 @@ bool build_reduced_workspace(
         state->AT, &state->A, workspace->stream,
         state->transpose_handle, &state->construction_temp,
         &state->construction_temp_capacity);
+    }
+    if (hprlp_sparse_has_64bit_offsets(workspace->AT) &&
+        (state->AT.rowPtr64 != nullptr ||
+         state->A.rowPtr64 != nullptr)) {
+        return finish_selected_csr_from_wide_source(
+            workspace, state, parameters, iteration, start);
+    }
+    // A wide source can compact below INT32_MAX. In that case the retained
+    // CSR is genuinely 32-bit and may use the normal reduced backend probes.
     allocate_device(&state->AT_row_buckets, state->free_count);
     allocate_device(&state->A_row_buckets, workspace->m);
     CUDA_CHECK(cudaMemsetAsync(
@@ -5815,6 +6145,15 @@ bool build_reduced_workspace(
     state->built = true;
     state->last_rebuild_iteration = iteration;
     state->last_free_columns = state->free_count;
+    if (hprlp_sparse_has_64bit_offsets(workspace->AT)) {
+        std::cout << "  reduced adaptive CSR: source_nnz="
+                  << workspace->A->numElements
+                  << " reduced_nnz=" << state->AT.numElements
+                  << " offset_bits=32 backend="
+                  << (parameters != nullptr && parameters->CUSPARSE_spmv
+                          ? "cusparse" : "profiled-32")
+                  << std::endl;
+    }
     if (parameters != nullptr && parameters->autotune_verbose) {
         std::cout << "  reduced build: iteration=" << iteration
                   << ", free=" << state->base_count
@@ -5828,6 +6167,11 @@ bool build_reduced_workspace(
 bool extend_reduced_delta_workspace(
     HPRLP_workspace_gpu *workspace,
     HPRLP_reduced_matrix_state *state) {
+    // The existing delta representation uses int32 entry positions. For a
+    // wide source, rebuild the selected CSR at this checkpoint so its own
+    // measured nnz determines the new 32/64-bit offset width.
+    if (hprlp_sparse_has_64bit_offsets(workspace->AT)) return false;
+
     const int new_count = state->recorded_delta_count;
     if (!state->built || new_count <= 0 ||
         state->recorded_changed_count != new_count) {
@@ -6216,6 +6560,27 @@ void enqueue_reduced_x_updates(
                 workspace->halpern_factors, workspace->uniform_unit_sign,
                 kReducedVectorThreads, workspace->stream);
         } else if (state->use_fused_x) {
+            if (state->AT.rowPtr64 != nullptr) {
+                if (state->AT.colIndex64 != nullptr) {
+                    hprlp_wide_fused_x_kernel<<<
+                        state->base_count, 256, 0, workspace->stream>>>(
+                        state->x, state->x_hat, state->lower, state->upper,
+                        state->bound_type, state->objective, state->last_x,
+                        workspace->y, state->AT.rowPtr64,
+                        state->AT.colIndex64, state->AT.value,
+                        workspace->Halpern_params, workspace->halpern_factors,
+                        nullptr, nullptr, 0, 0, state->base_count);
+                } else {
+                    hprlp_wide_fused_x_kernel<<<
+                        state->base_count, 256, 0, workspace->stream>>>(
+                        state->x, state->x_hat, state->lower, state->upper,
+                        state->bound_type, state->objective, state->last_x,
+                        workspace->y, state->AT.rowPtr64,
+                        state->AT.colIndex, state->AT.value,
+                        workspace->Halpern_params, workspace->halpern_factors,
+                        nullptr, nullptr, 0, 0, state->base_count);
+                }
+            } else {
             if (state->AT_short_count > 0) fused_reduced_x_short_kernel<<<
                 HPRLP_NUM_BLOCKS(state->AT_short_count), HPRLP_NUM_THREADS, 0,
                 workspace->stream>>>(
@@ -6234,6 +6599,7 @@ void enqueue_reduced_x_updates(
                 state->AT.rowPtr, state->AT.colIndex, state->AT.value,
                 workspace->Halpern_params, workspace->halpern_factors,
                 state->AT_rows_warp, state->AT_warp_count);
+            }
         } else {
             CUSPARSE_spmvop_AT &at = state->spmv_AT;
             check_cusparse(hprlp_run_spmvop(
@@ -6485,6 +6851,29 @@ void enqueue_reduced_y_updates(
             workspace->halpern_factors, workspace->uniform_unit_sign,
             workspace->m);
     } else if (state->use_fused_y) {
+        if (state->A.rowPtr64 != nullptr) {
+            if (state->A.colIndex64 != nullptr) {
+                hprlp_wide_fused_y_kernel<<<
+                    workspace->m, 256, 0, workspace->stream>>>(
+                    workspace->y, workspace->AL, workspace->AU,
+                    workspace->y_bound_type, workspace->last_y,
+                    state->x_hat, state->A.rowPtr64,
+                    state->A.colIndex64, state->A.value,
+                    workspace->Halpern_params, workspace->halpern_factors,
+                    nullptr, nullptr, state->row_fixed_shift,
+                    0, 0, workspace->m);
+            } else {
+                hprlp_wide_fused_y_kernel<<<
+                    workspace->m, 256, 0, workspace->stream>>>(
+                    workspace->y, workspace->AL, workspace->AU,
+                    workspace->y_bound_type, workspace->last_y,
+                    state->x_hat, state->A.rowPtr64,
+                    state->A.colIndex, state->A.value,
+                    workspace->Halpern_params, workspace->halpern_factors,
+                    nullptr, nullptr, state->row_fixed_shift,
+                    0, 0, workspace->m);
+            }
+        } else {
         if (state->A_short_count > 0) fused_reduced_y_short_kernel<<<
             HPRLP_NUM_BLOCKS(state->A_short_count), HPRLP_NUM_THREADS, 0,
             workspace->stream>>>(
@@ -6507,6 +6896,7 @@ void enqueue_reduced_y_updates(
             state->delta_A.value, use_delta, workspace->Halpern_params,
             workspace->halpern_factors, state->A_rows_warp,
             state->A_warp_count);
+        }
     } else {
         if (state->base_count > 0) {
             CUSPARSE_spmvop_A &a = state->spmv_A;
@@ -8817,7 +9207,8 @@ void hprlp_update_reduced_matrix_mode(
         ? static_cast<HPRLP_FLOAT>(state->row_active_count) / workspace->m
         : 1.0;
     const bool row_ready =
-        reduced_rows_enabled() && !force_full_alignment && mask_enabled &&
+        reduced_rows_enabled() &&
+        !force_full_alignment && mask_enabled &&
         state->row_mask_started && state->row_active_count > 0 &&
         row_ratio < reduced_row_enter_ratio() &&
         (state->row_stable_count >= HPRLP_REDUCED_ENTER_STABLE ||
@@ -8826,6 +9217,10 @@ void hprlp_update_reduced_matrix_mode(
         (!column_ready || row_ratio < free_ratio);
 
     if (select_rows) {
+        if (hprlp_sparse_has_64bit_offsets(workspace->A)) {
+            // The wide row path uses cuSPARSE, not int32 packed candidates.
+            workspace->reduced_backend_autotune_done = true;
+        }
         if (!workspace->reduced_backend_autotune_done) {
             const HPRLP_reduced_profile_token autotune_profile =
                 begin_reduced_stage_profile(workspace, state);
@@ -8853,7 +9248,8 @@ void hprlp_update_reduced_matrix_mode(
             state->row_delta_work_accum >= row_rebuild_work;
         const bool specialized_row_rebase_due =
             state->row_built && state->row_mask_changed &&
-            (state->row_use_signed_x ||
+            (hprlp_sparse_has_64bit_offsets(workspace->A) ||
+             state->row_use_signed_x ||
              state->row_use_packed_dictionary_x);
         if (specialized_row_rebase_due) {
             // The full-path packed X launchers consume one compact AT.  Until

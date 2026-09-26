@@ -32,11 +32,50 @@ struct HPRLP_reduced_matrix_state;
 // We need these values for constructing CUDA CSR sparse matrix through "cusparseCreateCsr".
 struct sparseMatrix {
     int row, col;
-    int numElements;
+    std::int64_t numElements;
     int *colIndex;
+    std::int64_t *colIndex64;
     int *rowPtr;
+    // Exactly one row-offset array is present. Small models retain int32.
+    // Large host models use rowPtr64 with int32 column IDs. Device CSR uses
+    // 64/32 for CUDA 13.3+ scalar SpMVOp and 64/64 for batched SpMM or
+    // older cuSPARSE scalar SpMV.
+    std::int64_t *rowPtr64;
     HPRLP_FLOAT *value;
 };
+
+inline bool hprlp_sparse_has_64bit_offsets(const sparseMatrix *matrix) {
+    return matrix != nullptr && matrix->rowPtr64 != nullptr;
+}
+
+inline const void *hprlp_sparse_row_offsets(const sparseMatrix *matrix) {
+    return hprlp_sparse_has_64bit_offsets(matrix)
+        ? static_cast<const void *>(matrix->rowPtr64)
+        : static_cast<const void *>(matrix->rowPtr);
+}
+
+inline void *hprlp_sparse_row_offsets(sparseMatrix *matrix) {
+    return hprlp_sparse_has_64bit_offsets(matrix)
+        ? static_cast<void *>(matrix->rowPtr64)
+        : static_cast<void *>(matrix->rowPtr);
+}
+
+inline bool hprlp_sparse_has_64bit_column_indices(
+        const sparseMatrix *matrix) {
+    return matrix != nullptr && matrix->colIndex64 != nullptr;
+}
+
+inline const void *hprlp_sparse_column_indices(const sparseMatrix *matrix) {
+    return hprlp_sparse_has_64bit_column_indices(matrix)
+        ? static_cast<const void *>(matrix->colIndex64)
+        : static_cast<const void *>(matrix->colIndex);
+}
+
+inline void *hprlp_sparse_column_indices(sparseMatrix *matrix) {
+    return hprlp_sparse_has_64bit_column_indices(matrix)
+        ? static_cast<void *>(matrix->colIndex64)
+        : static_cast<void *>(matrix->colIndex);
+}
 
 struct HPRLP_structured_operator_gpu {
     int coefficient_bias = 0;
@@ -564,6 +603,7 @@ struct HPRLP_workspace_gpu {
 
     bool all_positive_unit_coefficients = false;
     int8_t uniform_unit_sign = 0;
+    bool wide_signed_unit_ready = false;
     bool all_zero_lower_unbounded_variables = false;
     bool unit_operator_x_ready = false;
     bool unit_operator_y_ready = false;
@@ -818,5 +858,6 @@ struct HPRLP_LP_Data {
     // Objective: minimize c'*x
     HPRLP_FLOAT *c;     // Size: n (objective coefficients)
 };
+
 
 #endif

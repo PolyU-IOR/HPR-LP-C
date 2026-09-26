@@ -259,6 +259,28 @@ void prepare_unit_operators(HPRLP_workspace_gpu *workspace, const Scaling_info *
         workspace->A == nullptr || workspace->AT == nullptr) {
         return;
     }
+    if (workspace->A->rowPtr64 != nullptr) {
+        if (workspace->uniform_unit_sign == 0 &&
+            !workspace->wide_signed_unit_ready) return;
+        create_zero_vector_device_compressible(
+            workspace->inverse_row_norm, workspace->m);
+        create_zero_vector_device_compressible(
+            workspace->inverse_col_norm, workspace->n);
+        workspace->factor_row_norm = scaling_info->row_norm;
+        workspace->factor_col_norm = scaling_info->col_norm;
+        reciprocal_vector_kernel<<<
+            HPRLP_NUM_BLOCKS(workspace->m), HPRLP_NUM_THREADS,
+            0, workspace->stream>>>(
+            scaling_info->row_norm, workspace->inverse_row_norm,
+            workspace->m);
+        reciprocal_vector_kernel<<<
+            HPRLP_NUM_BLOCKS(workspace->n), HPRLP_NUM_THREADS,
+            0, workspace->stream>>>(
+            scaling_info->col_norm, workspace->inverse_col_norm,
+            workspace->n);
+        CUDA_CHECK(cudaStreamSynchronize(workspace->stream));
+        return;
+    }
 
     const std::size_t nonzeros = static_cast<std::size_t>(workspace->AT->numElements);
     const bool use_unit_x = hprlp_use_unit_operator_x(

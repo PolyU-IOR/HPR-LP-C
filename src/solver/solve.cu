@@ -102,6 +102,18 @@ static HPRLP_parameters hprlp_effective_parameters(
         effective.use_reduced_matrix =
             hprlp_auto_policy_uses_reduced_matrix(solve_model);
     }
+    if (solve_model && solve_model->A &&
+        hprlp_sparse_has_64bit_offsets(solve_model->A)) {
+        effective.use_presolve = false;
+        effective.presolver = HPRLP_PRESOLVER_NONE;
+        // A very large dense state makes autotune's saved state expensive.
+        // Moderate-dimension wide matrices can safely probe the 64-bit CSR
+        // fused kernels; billion-column MCF models retain cuSPARSE.
+        constexpr int kWideFusedMaximumDimension = 1000000;
+        if (solve_model->m > kWideFusedMaximumDimension ||
+            solve_model->n > kWideFusedMaximumDimension)
+            effective.CUSPARSE_spmv = true;
+    }
     return effective;
 }
 
@@ -876,7 +888,15 @@ HPRLP_results solve(const LP_info_cpu *model, const HPRLP_parameters *param) {
                   << ", nnz = " << model->A->numElements << std::endl;
     }
 
-    if (!actual_param->use_presolve ||
+    const bool wide_source =
+        hprlp_sparse_has_64bit_offsets(model->A);
+    if (wide_source && actual_param->use_presolve &&
+        actual_param->presolver != HPRLP_PRESOLVER_NONE) {
+        std::cerr << "[warning] Presolvers require int32 CSR positions; "
+                  << "solving the original model without presolve.\n";
+    }
+    if (wide_source ||
+        !actual_param->use_presolve ||
         actual_param->presolver == HPRLP_PRESOLVER_NONE) {
         const HPRLP_parameters effective =
             hprlp_effective_parameters(actual_param, model);
@@ -927,7 +947,7 @@ HPRLP_results solve(const LP_info_cpu *model, const HPRLP_parameters *param) {
             ? reduced_device_model.m : solve_model->m;
         const int reduced_n = device_handoff_active
             ? reduced_device_model.n : solve_model->n;
-        const int reduced_nnz = device_handoff_active
+        const std::int64_t reduced_nnz = device_handoff_active
             ? (reduced_device_model.A
                 ? reduced_device_model.A->numElements : 0)
             : (solve_model->A ? solve_model->A->numElements : 0);
@@ -964,6 +984,7 @@ HPRLP_results solve(const LP_info_cpu *model, const HPRLP_parameters *param) {
     if (device_handoff_active) {
         device_model_dimensions.m = reduced_device_model.m;
         device_model_dimensions.n = reduced_device_model.n;
+        device_model_dimensions.A = reduced_device_model.A;
     }
     const LP_info_cpu *policy_model = device_handoff_active
         ? &device_model_dimensions : solve_model;

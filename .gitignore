@@ -55,6 +55,7 @@ LocalPreferences.toml
 *.log
 *.out
 *.csv
+/docs/int64_nnz_support.md
 
 # Editors and operating systems
 .vscode/

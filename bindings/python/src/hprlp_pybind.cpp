@@ -19,6 +19,7 @@
 #include "HPRLP.h"
 #include "api/structs.h"
 #include "io/mps_reader.h"
+#include "support/dimension_limits.h"
 
 namespace py = pybind11;
 
@@ -416,9 +417,9 @@ public:
  * @brief Create model from numpy arrays (CSR format) - Python wrapper
  */
 PyModel py_create_model_from_arrays(
-    int m, int n, int nnz,
-    py::array_t<int> rowPtr_arr,
-    py::array_t<int> colIndex_arr,
+    std::int64_t m, std::int64_t n, std::int64_t nnz,
+    py::array rowPtr_arr,
+    py::array colIndex_arr,
     py::array_t<double> values_arr,
     py::array_t<double> AL_arr,
     py::array_t<double> AU_arr,
@@ -429,6 +430,11 @@ PyModel py_create_model_from_arrays(
 ) {
     PyModel py_model;
     
+    // Reject before narrowing into the int32 core.
+    if (!hprlp_dimensions_fit_int32(m, n)) {
+        throw std::invalid_argument(
+            "m or n exceeds INT32_MAX; HPR-LP-C model was not created");
+    }
     // Validate dimensions
     if (m <= 0 || n <= 0 || nnz <= 0) {
         throw std::invalid_argument("Invalid dimensions: m, n, and nnz must be positive");
@@ -445,7 +451,8 @@ PyModel py_create_model_from_arrays(
     auto c_buf = c_arr.request();
 
     // Validate array sizes
-    int expected_ptr_size = is_csc ? n + 1 : m + 1;
+    const std::size_t expected_ptr_size =
+        static_cast<std::size_t>(is_csc ? n : m) + 1;
     if (rowPtr_buf.size != expected_ptr_size) {
         throw std::invalid_argument("Invalid rowPtr/colPtr size");
     }
@@ -459,8 +466,17 @@ PyModel py_create_model_from_arrays(
         throw std::invalid_argument("Invalid l/u/c size");
     }
 
+    const bool offsets64 = nnz > std::numeric_limits<int>::max();
+    if (!(rowPtr_arr.flags() & py::array::c_style) ||
+        !(colIndex_arr.flags() & py::array::c_style) ||
+        !colIndex_arr.dtype().is(py::dtype::of<int>()) ||
+        !rowPtr_arr.dtype().is(offsets64
+            ? py::dtype::of<std::int64_t>() : py::dtype::of<int>())) {
+        throw std::invalid_argument(
+            "Sparse offsets must be contiguous int32/int64 for nnz, and indexes contiguous int32");
+    }
+
     // Get raw pointers
-    int* rowPtr = static_cast<int*>(rowPtr_buf.ptr);
     int* colIndex = static_cast<int*>(colIndex_buf.ptr);
     double* values = static_cast<double*>(values_buf.ptr);
     double* AL = static_cast<double*>(AL_buf.ptr);
@@ -470,12 +486,16 @@ PyModel py_create_model_from_arrays(
     double* c = static_cast<double*>(c_buf.ptr);
 
     // Create model using C API
-    py_model.model_ptr = create_model_from_arrays(
-        m, n, nnz,
-        rowPtr, colIndex, values,
-        AL, AU, l, u, c,
-        is_csc
-    );
+    if (offsets64) {
+        py_model.model_ptr = create_model_from_arrays64(
+            m, n, nnz, static_cast<const std::int64_t*>(rowPtr_buf.ptr),
+            colIndex, values, AL, AU, l, u, c, is_csc);
+    } else {
+        py_model.model_ptr = create_model_from_arrays(
+            static_cast<int>(m), static_cast<int>(n), static_cast<int>(nnz),
+            static_cast<const int*>(rowPtr_buf.ptr), colIndex, values,
+            AL, AU, l, u, c, is_csc);
+    }
     
     if (py_model.model_ptr == nullptr) {
         throw std::runtime_error("Failed to create model from arrays");

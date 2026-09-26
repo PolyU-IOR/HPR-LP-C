@@ -333,3 +333,36 @@ function c_free_results(x_ptr::Ptr{Float64}, y_ptr::Ptr{Float64}, z_ptr::Ptr{Flo
         ccall(:free, Cvoid, (Ptr{Float64},), z_ptr)
     end
 end
+
+# Sparse offsets may exceed Int32 even while every row/column identifier fits.
+function c_create_model_from_arrays(m::Int, n::Int, nnz::Int,
+                                     rowPtr::Vector{Int64}, colIndex::Vector{Int32}, values::Vector{Float64},
+                                     AL::Vector{Float64}, AU::Vector{Float64},
+                                     l::Vector{Float64}, u::Vector{Float64},
+                                     c::Vector{Float64}, is_csc::Bool)
+    return ccall((:create_model_from_arrays64, libhprlp), Ptr{Cvoid},
+                 (Int64, Int64, Int64,
+                  Ptr{Int64}, Ptr{Int32}, Ptr{Float64},
+                  Ptr{Float64}, Ptr{Float64}, Ptr{Float64},
+                  Ptr{Float64}, Ptr{Float64}, Bool),
+                 m, n, nnz, rowPtr, colIndex, values, AL, AU, l, u, c, is_csc)
+end
+
+function c_create_model_from_arrays_with_obj_constant(
+    m::Int, n::Int, nnz::Int,
+    rowPtr::Vector{Int64}, colIndex::Vector{Int32}, values::Vector{Float64},
+    AL::Vector{Float64}, AU::Vector{Float64},
+    l::Vector{Float64}, u::Vector{Float64},
+    c::Vector{Float64}, obj_constant::Float64, is_csc::Bool,
+)
+    return ccall(
+        (:create_model_from_arrays64_with_obj_constant, libhprlp),
+        Ptr{Cvoid},
+        (Int64, Int64, Int64,
+         Ptr{Int64}, Ptr{Int32}, Ptr{Float64},
+         Ptr{Float64}, Ptr{Float64}, Ptr{Float64},
+         Ptr{Float64}, Ptr{Float64}, Float64, Bool),
+        m, n, nnz, rowPtr, colIndex, values, AL, AU, l, u, c,
+        obj_constant, is_csc,
+    )
+end

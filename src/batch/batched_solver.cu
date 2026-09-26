@@ -430,12 +430,14 @@ void prepare_spmm(BatchedWorkspace *ws, const LP_info_gpu *shared_lp) {
     CUSPARSE_CHECK(cusparseCreate(&sp->handle));
     CUSPARSE_CHECK(cusparseSetStream(sp->handle, ws->stream));
     CUSPARSE_CHECK(cusparseCreateCsr(&sp->A_descr, ws->m, ws->n, shared_lp->A->numElements,
-                                     shared_lp->A->rowPtr, shared_lp->A->colIndex, shared_lp->A->value,
-                                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                     hprlp_sparse_row_offsets(shared_lp->A), hprlp_sparse_column_indices(shared_lp->A), shared_lp->A->value,
+                                     hprlp_sparse_has_64bit_offsets(shared_lp->A) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+                                     hprlp_sparse_has_64bit_column_indices(shared_lp->A) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
                                      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
     CUSPARSE_CHECK(cusparseCreateCsr(&sp->AT_descr, ws->n, ws->m, shared_lp->AT->numElements,
-                                     shared_lp->AT->rowPtr, shared_lp->AT->colIndex, shared_lp->AT->value,
-                                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                     hprlp_sparse_row_offsets(shared_lp->AT), hprlp_sparse_column_indices(shared_lp->AT), shared_lp->AT->value,
+                                     hprlp_sparse_has_64bit_offsets(shared_lp->AT) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
+                                     hprlp_sparse_has_64bit_column_indices(shared_lp->AT) ? CUSPARSE_INDEX_64I : CUSPARSE_INDEX_32I,
                                      CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
     CUSPARSE_CHECK(cusparseCreateDnMat(&sp->X_descr, ws->n, ws->B, ws->n, ws->X, CUDA_R_64F, CUSPARSE_ORDER_COL));
     CUSPARSE_CHECK(cusparseCreateDnMat(&sp->X_hat_descr, ws->n, ws->B, ws->n, ws->X_hat, CUDA_R_64F, CUSPARSE_ORDER_COL));
@@ -949,6 +951,12 @@ extern "C" HPRLP_batched_results solve_batched(const LP_info_cpu *model,
         return make_batched_error("ERROR", model ? model->m : 0, model ? model->n : 0, std::max(batch_size, 0));
     }
 
+    if (model->m > std::numeric_limits<int>::max() / batch_size ||
+        model->n > std::numeric_limits<int>::max() / batch_size) {
+        return make_batched_error(
+            "BATCH_DIMENSION_OVERFLOW", model->m, model->n, batch_size);
+    }
+
     HPRLP_parameters default_param;
     HPRLP_parameters actual = param ? *param : default_param;
     actual.use_presolve = false;
@@ -970,7 +978,7 @@ extern "C" HPRLP_batched_results solve_batched(const LP_info_cpu *model,
     matrix_cpu.obj_constant = 0.0;
 
     LP_info_gpu shared_lp{};
-    copy_lpinfo_to_device(&matrix_cpu, &shared_lp);
+    copy_lpinfo_to_device(&matrix_cpu, &shared_lp, true);
 
     cublasHandle_t setup_cublas = nullptr;
     CUBLAS_CHECK(cublasCreate(&setup_cublas));

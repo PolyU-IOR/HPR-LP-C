@@ -12,10 +12,46 @@ __global__ void hprlp_fill_csr_source_rows_kernel(
     }
 }
 
+template <typename ColumnIndex>
+__global__ void hprlp_count_transpose_rows64_kernel(
+    const ColumnIndex *column_indices, std::int64_t nonzeros,
+    std::int64_t *row_offsets) {
+    const std::int64_t first =
+        static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::int64_t stride =
+        static_cast<std::int64_t>(gridDim.x) * blockDim.x;
+    for (std::int64_t entry = first; entry < nonzeros; entry += stride) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(
+                row_offsets + column_indices[entry] + 1),
+            1ULL);
+    }
+}
+
+template <typename ColumnIndex>
+__global__ void hprlp_fill_transpose64_kernel(
+    const std::int64_t *row_offsets, const ColumnIndex *column_indices,
+    const HPRLP_FLOAT *values, int rows, std::int64_t *cursors,
+    ColumnIndex *transpose_columns, HPRLP_FLOAT *transpose_values) {
+    for (int row = blockIdx.x; row < rows; row += gridDim.x) {
+        for (std::int64_t entry = row_offsets[row] + threadIdx.x;
+             entry < row_offsets[row + 1]; entry += blockDim.x) {
+            const ColumnIndex destination = column_indices[entry];
+            const std::int64_t output = static_cast<std::int64_t>(atomicAdd(
+                reinterpret_cast<unsigned long long *>(cursors + destination),
+                1ULL));
+            transpose_columns[output] = row;
+            transpose_values[output] = values[entry];
+        }
+    }
+}
+
 void hprlp_release_sparse_matrix_storage(sparseMatrix *matrix) {
     if (matrix == nullptr) return;
     hprlp_device_free(matrix->rowPtr);
+    hprlp_device_free(matrix->rowPtr64);
     hprlp_device_free(matrix->colIndex);
+    hprlp_device_free(matrix->colIndex64);
     hprlp_device_free(matrix->value);
     delete matrix;
 }
@@ -26,7 +62,9 @@ bool build_stable_device_transpose(const sparseMatrix *matrix,
                                    sparseMatrix **transpose_out) {
     if (matrix == nullptr || transpose_out == nullptr ||
         matrix->row <= 0 || matrix->col <= 0 || matrix->numElements <= 0 ||
-        matrix->rowPtr == nullptr || matrix->colIndex == nullptr ||
+        (matrix->rowPtr == nullptr && matrix->rowPtr64 == nullptr) ||
+        (matrix->colIndex == nullptr &&
+         matrix->colIndex64 == nullptr) ||
         matrix->value == nullptr) {
         return false;
     }
@@ -37,6 +75,76 @@ bool build_stable_device_transpose(const sparseMatrix *matrix,
     transpose->row = matrix->col;
     transpose->col = matrix->row;
     transpose->numElements = matrix->numElements;
+
+    if (hprlp_sparse_has_64bit_offsets(matrix)) {
+        std::int64_t *cursors = nullptr;
+        try {
+            const std::size_t offset_count =
+                static_cast<std::size_t>(transpose->row) + 1;
+            CUDA_CHECK(hprlp_device_malloc_compressible(
+                &transpose->rowPtr64,
+                offset_count * sizeof(std::int64_t)));
+            CUDA_CHECK(cudaMemset(transpose->rowPtr64, 0,
+                                  offset_count * sizeof(std::int64_t)));
+            const int threads = 256;
+            const int count_blocks = static_cast<int>(std::min<std::int64_t>(
+                65535, (matrix->numElements + threads - 1) / threads));
+            if (hprlp_sparse_has_64bit_column_indices(matrix)) {
+                hprlp_count_transpose_rows64_kernel<<<count_blocks, threads>>>(
+                    matrix->colIndex64, matrix->numElements,
+                    transpose->rowPtr64);
+            } else {
+                hprlp_count_transpose_rows64_kernel<<<count_blocks, threads>>>(
+                    matrix->colIndex, matrix->numElements,
+                    transpose->rowPtr64);
+            }
+            CUDA_CHECK(cudaGetLastError());
+            thrust::inclusive_scan(
+                thrust::device_pointer_cast(transpose->rowPtr64),
+                thrust::device_pointer_cast(transpose->rowPtr64) +
+                    offset_count,
+                thrust::device_pointer_cast(transpose->rowPtr64));
+
+            if (hprlp_sparse_has_64bit_column_indices(matrix)) {
+                CUDA_CHECK(hprlp_device_malloc_compressible(
+                    &transpose->colIndex64,
+                    nonzeros * sizeof(std::int64_t)));
+            } else {
+                CUDA_CHECK(hprlp_device_malloc_compressible(
+                    &transpose->colIndex, nonzeros * sizeof(int)));
+            }
+            CUDA_CHECK(hprlp_device_malloc_compressible(
+                &transpose->value, nonzeros * sizeof(HPRLP_FLOAT)));
+            CUDA_CHECK(hprlp_device_malloc_compressible(
+                &cursors, static_cast<std::size_t>(transpose->row) *
+                    sizeof(std::int64_t)));
+            CUDA_CHECK(cudaMemcpy(
+                cursors, transpose->rowPtr64,
+                static_cast<std::size_t>(transpose->row) *
+                    sizeof(std::int64_t), cudaMemcpyDeviceToDevice));
+            const int fill_blocks = std::min(matrix->row, 65535);
+            if (hprlp_sparse_has_64bit_column_indices(matrix)) {
+                hprlp_fill_transpose64_kernel<<<fill_blocks, threads>>>(
+                    matrix->rowPtr64, matrix->colIndex64, matrix->value,
+                    matrix->row, cursors, transpose->colIndex64,
+                    transpose->value);
+            } else {
+                hprlp_fill_transpose64_kernel<<<fill_blocks, threads>>>(
+                    matrix->rowPtr64, matrix->colIndex, matrix->value,
+                    matrix->row, cursors, transpose->colIndex,
+                    transpose->value);
+            }
+            CUDA_CHECK(cudaGetLastError());
+            CUDA_CHECK(cudaDeviceSynchronize());
+            CUDA_CHECK(hprlp_device_free(cursors));
+        } catch (...) {
+            if (cursors) hprlp_device_free(cursors);
+            hprlp_release_sparse_matrix_storage(transpose);
+            throw;
+        }
+        *transpose_out = transpose;
+        return true;
+    }
 
     try {
         // The baseline host transpose visits CSR entries in their original

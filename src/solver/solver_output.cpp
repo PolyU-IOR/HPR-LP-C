@@ -201,13 +201,13 @@ void print_solver_parameters(const HPRLP_parameters *param) {
     const char *presolver_name = "Disabled";
     if (param->use_presolve && param->presolver != HPRLP_PRESOLVER_NONE) {
         presolver_name = param->presolver == HPRLP_PRESOLVER_GPU
-            ? "GPU-Presolver-C"
+            ? "GPU-Presolver"
             : "PSLP";
     }
     if (show_parameter(param, HPRLP_PARAM_PRESOLVER)) std::cout << "  Presolver:           " << presolver_name << "\n";
     if (show_parameter(param, HPRLP_PARAM_GPU_FOLDING) && param->use_presolve && param->presolver == HPRLP_PRESOLVER_GPU) {
-        std::cout << "  GPU Folding:         "
-                  << (param->enable_gpu_folding ? "Enabled" : "Disabled") << "\n";
+        std::cout << "  GPU Folding:         Unavailable in vendored GPU-Presolver"
+                  << " (option ignored)\n";
     }
     const bool show_scaling = param->print_debug_info ||
         (param->specified_parameter_mask & (HPRLP_PARAM_CR_SCALING |

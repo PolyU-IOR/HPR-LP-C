@@ -370,6 +370,7 @@ bool receive_reduced_model(int fd,
             payload.reduced_n,
             payload.reduced_nnz,
             row_ptr.data(),
+            nullptr,
             col_idx.data(),
             values.data(),
         };

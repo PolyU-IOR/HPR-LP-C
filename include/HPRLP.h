@@ -125,6 +125,30 @@ LP_info_cpu* create_model_from_arrays_with_obj_constant(
     const HPRLP_FLOAT *c, HPRLP_FLOAT obj_constant,
     bool is_csc = false);
 
+/** Create a model with int64 CSR/CSC offsets and nnz. The caller supplies
+ * nnz int32 column/row IDs, each bounded by the matrix dimensions. The
+ * scalar CUDA 13.3+ path keeps these IDs int32; batched SpMM and older
+ * scalar SpMV widen them to int64. Models at or below INT32_MAX use the
+ * existing 32-bit implementation. m and n are received as int64 so values
+ * above INT32_MAX are detected and rejected with a warning before any
+ * narrowing conversion; column counts above that limit are not supported. */
+LP_info_cpu* create_model_from_arrays64(
+    std::int64_t m, std::int64_t n, std::int64_t nnz,
+    const std::int64_t *rowPtr, const int *colIndex,
+    const HPRLP_FLOAT *values,
+    const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+    const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+    const HPRLP_FLOAT *c, bool is_csc = false);
+
+LP_info_cpu* create_model_from_arrays64_with_obj_constant(
+    std::int64_t m, std::int64_t n, std::int64_t nnz,
+    const std::int64_t *rowPtr, const int *colIndex,
+    const HPRLP_FLOAT *values,
+    const HPRLP_FLOAT *AL, const HPRLP_FLOAT *AU,
+    const HPRLP_FLOAT *l, const HPRLP_FLOAT *u,
+    const HPRLP_FLOAT *c, HPRLP_FLOAT obj_constant,
+    bool is_csc = false);
+
 /**
  * @brief Create an LP model from an MPS file
  * 

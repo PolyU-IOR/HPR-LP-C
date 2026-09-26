@@ -4,7 +4,8 @@
 #include "api/structs.h"
 #include "support/utils.h"
 
-void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu);
+void copy_lpinfo_to_device(const LP_info_cpu *lp_info_cpu, LP_info_gpu *lp_info_gpu,
+                           bool for_batched = false);
 
 // Build the packed-dictionary metadata used by the normal-update autotuner
 // directly from the device-resident presolved A and A^T matrices.

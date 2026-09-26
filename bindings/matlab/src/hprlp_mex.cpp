@@ -17,6 +17,9 @@
 #include <cmath>
 #include <sstream>
 #include <iostream>
+#include <cstdint>
+#include <limits>
+#include <vector>
 
 /**
  * Custom streambuf that redirects to mexPrintf
@@ -156,47 +159,51 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
             mexErrMsgIdAndTxt("HPRLP:InvalidInput", "Matrix A must be sparse");
         }
         
-        // Get dimensions
-        int m = static_cast<int>(mxGetM(A_mx));
-        int n = static_cast<int>(mxGetN(A_mx));
-        int nnz = static_cast<int>(mxGetNzmax(A_mx));
-        
-        // Validate dimensions
-        if (mxGetM(AL_mx) * mxGetN(AL_mx) != m) {
-            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "AL must have length m");
+        // Get dimensions and the actual number of stored CSC entries.
+        const mwSize raw_m = mxGetM(A_mx);
+        const mwSize raw_n = mxGetN(A_mx);
+        if (raw_m == 0 || raw_n == 0 ||
+            raw_m > static_cast<mwSize>(std::numeric_limits<int>::max()) ||
+            raw_n > static_cast<mwSize>(std::numeric_limits<int>::max())) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput",
+                             "m or n exceeds INT32_MAX; HPR-LP-C model was not created");
         }
-        if (mxGetM(AU_mx) * mxGetN(AU_mx) != m) {
-            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "AU must have length m");
+        const int m = static_cast<int>(raw_m);
+        const int n = static_cast<int>(raw_n);
+        const mwIndex* jc = mxGetJc(A_mx);
+        const mwIndex* ir = mxGetIr(A_mx);
+        const double* pr = mxGetPr(A_mx);
+        if (!mxIsDouble(A_mx) || mxIsComplex(A_mx) || !jc || !ir || !pr ||
+            jc[n] > mxGetNzmax(A_mx) ||
+            jc[n] > static_cast<mwIndex>(
+                std::numeric_limits<std::int64_t>::max())) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "Invalid sparse matrix A");
         }
-        if (mxGetM(l_mx) * mxGetN(l_mx) != n) {
-            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "l must have length n");
+        const std::int64_t nnz = static_cast<std::int64_t>(jc[n]);
+
+        // Validate vector lengths.
+        if (mxGetNumberOfElements(AL_mx) != raw_m ||
+            mxGetNumberOfElements(AU_mx) != raw_m ||
+            mxGetNumberOfElements(l_mx) != raw_n ||
+            mxGetNumberOfElements(u_mx) != raw_n ||
+            mxGetNumberOfElements(c_mx) != raw_n) {
+            mexErrMsgIdAndTxt("HPRLP:InvalidInput",
+                             "LP bound/objective vector dimensions do not match A");
         }
-        if (mxGetM(u_mx) * mxGetN(u_mx) != n) {
-            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "u must have length n");
+
+        std::vector<std::int64_t> colPtr(static_cast<std::size_t>(n) + 1);
+        std::vector<int> rowIndex(static_cast<std::size_t>(nnz));
+        for (int j = 0; j <= n; ++j) {
+            colPtr[j] = static_cast<std::int64_t>(jc[j]);
         }
-        if (mxGetM(c_mx) * mxGetN(c_mx) != n) {
-            mexErrMsgIdAndTxt("HPRLP:InvalidInput", "c must have length n");
+        for (std::int64_t i = 0; i < nnz; ++i) {
+            if (ir[i] >= raw_m) {
+                mexErrMsgIdAndTxt("HPRLP:InvalidInput",
+                                 "A contains an out-of-range row index");
+            }
+            rowIndex[static_cast<std::size_t>(i)] = static_cast<int>(ir[i]);
         }
-        
-        // Extract sparse matrix in CSC format (MATLAB's native format)
-        mwIndex* jc = mxGetJc(A_mx);  // Column pointers
-        mwIndex* ir = mxGetIr(A_mx);  // Row indices
-        double* pr = mxGetPr(A_mx);   // Values
-        
-        // Allocate arrays for CSC format
-        int* colPtr = new int[n + 1];
-        int* rowIndex = new int[nnz];
-        double* values = new double[nnz];
-        
-        // Convert to 0-based indexing (copy the data)
-        for (int j = 0; j <= n; j++) {
-            colPtr[j] = static_cast<int>(jc[j]);
-        }
-        for (int i = 0; i < nnz; i++) {
-            rowIndex[i] = static_cast<int>(ir[i]);
-            values[i] = pr[i];
-        }
-        
+
         // Get vectors
         double* AL = mxGetPr(AL_mx);
         double* AU = mxGetPr(AU_mx);
@@ -204,19 +211,18 @@ void mexFunction(int nlhs, mxArray* plhs[], int nrhs, const mxArray* prhs[]) {
         double* u = mxGetPr(u_mx);
         double* c = mxGetPr(c_mx);
         
-        // Call C library function (use CSC format, is_csc = true)
-        LP_info_cpu* model = create_model_from_arrays(
-            m, n, nnz,
-            colPtr, rowIndex, values,
-            AL, AU, l, u, c,
-            true  // is_csc = true for MATLAB's CSC format
-        );
-        
-        // Clean up temporary arrays
-        delete[] colPtr;
-        delete[] rowIndex;
-        delete[] values;
-        
+        LP_info_cpu* model = nullptr;
+        if (nnz > std::numeric_limits<int>::max()) {
+            model = create_model_from_arrays64(
+                m, n, nnz, colPtr.data(), rowIndex.data(), pr,
+                AL, AU, l, u, c, true);
+        } else {
+            std::vector<int> colPtr32(colPtr.begin(), colPtr.end());
+            model = create_model_from_arrays(
+                m, n, static_cast<int>(nnz), colPtr32.data(),
+                rowIndex.data(), pr, AL, AU, l, u, c, true);
+        }
+
         if (model == NULL) {
             mexErrMsgIdAndTxt("HPRLP:RuntimeError", "Failed to create model from arrays");
         }

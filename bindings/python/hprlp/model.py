@@ -135,13 +135,22 @@ class Model:
         from . import _hprlp_core
         from .solver import _ensure_contiguous_int32, _ensure_contiguous_float64
         
+        # Check shape before converting sparse column IDs to int32.
+        if not (sparse.issparse(A) or isinstance(A, np.ndarray)):
+            raise TypeError("A must be a numpy array or scipy sparse matrix")
+        m, n = A.shape
+        if m > np.iinfo(np.int32).max or n > np.iinfo(np.int32).max:
+            raise ValueError(
+                "m or n exceeds INT32_MAX; HPR-LP-C model was not created")
+
         # Convert A to CSR format if needed
         if sparse.issparse(A):
             if not sparse.isspmatrix_csr(A):
                 A = A.tocsr()
             m, n = A.shape
             nnz = A.nnz
-            rowPtr = _ensure_contiguous_int32(A.indptr)
+            rowPtr = np.ascontiguousarray(
+                A.indptr, dtype=np.int64 if nnz > np.iinfo(np.int32).max else np.int32)
             colIndex = _ensure_contiguous_int32(A.indices)
             values = _ensure_contiguous_float64(A.data)
             is_csc = False
@@ -150,13 +159,15 @@ class Model:
             A_sparse = sparse.csr_matrix(A)
             m, n = A_sparse.shape
             nnz = A_sparse.nnz
-            rowPtr = _ensure_contiguous_int32(A_sparse.indptr)
+            rowPtr = np.ascontiguousarray(
+                A_sparse.indptr, dtype=np.int64 if nnz > np.iinfo(np.int32).max else np.int32)
             colIndex = _ensure_contiguous_int32(A_sparse.indices)
             values = _ensure_contiguous_float64(A_sparse.data)
             is_csc = False
-        else:
-            raise TypeError("A must be a numpy array or scipy sparse matrix")
         
+        if nnz > np.iinfo(np.int64).max:
+            raise ValueError("Matrix nnz exceeds the int64 core limit")
+
         # Ensure other arrays are correct type
         AL = _ensure_contiguous_float64(AL)
         AU = _ensure_contiguous_float64(AU)

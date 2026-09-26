@@ -5,6 +5,7 @@
 #include "solver/backends/unit_factorized_launcher.cuh"
 #include "cuda_kernels/cuda_check.h"
 #include "cuda_kernels/backends/structured/factorized_stencil_kernels.cuh"
+#include "cuda_kernels/backends/generic/wide_fused_kernels.cuh"
 #include "cuda_kernels/backends/structured/grid_slack_laplacian_kernels.cuh"
 #include "cuda_kernels/backends/unit/signed_unit_kernels.cuh"
 #include "gpu/preprocessing/operators/dictionary/packed_dictionary_operator.h"

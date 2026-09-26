@@ -14,6 +14,7 @@
 #include "io/mps_reader.h"
 #include "HPRLP.h"
 #include "solver/internal/solver_output.h"
+#include "support/dimension_limits.h"
 
 #ifdef HPRLP_HAS_HDF5
 #include <hdf5.h>
@@ -50,7 +51,7 @@ static void print_usage(const char* prog) {
               << "      --pock <true/false>    Enable/disable Pock-Chambolle scaling (default: true)\n"
               << "      --bc <true/false>      Enable/disable bounds/cost scaling (default: true)\n"
               << "      --presolver <pslp|gpu|none>  Select presolver backend (default: gpu)\n"
-              << "      --gpu-folding <true/false>  Enable/disable GPU presolver folding (default: true)\n"
+              << "      --gpu-folding <true/false>  Compatibility option; ignored by vendored GPU-Presolver\n"
               << "      --reduced-matrix <true/false>  Enable adaptive row/column reduction in manual mode (default: true)\n"
               << "      --auto-memory-policy <true/false>  Couple reduced/compression from presolved dimensions (default: false)\n"
               << "  -h, --help                 Show this help and exit\n"
@@ -180,16 +181,18 @@ static LP_info_cpu* create_model_from_hdf5_file(const std::string& path) {
             read_hdf5_dataset<std::int64_t>(
                 file, "A/size", H5T_NATIVE_INT64);
         if (matrix_size.size() != 2 ||
-            matrix_size[0] <= 0 || matrix_size[1] <= 0 ||
-            matrix_size[0] > std::numeric_limits<int>::max() ||
-            matrix_size[1] > std::numeric_limits<int>::max()) {
+            matrix_size[0] <= 0 || matrix_size[1] <= 0) {
             throw std::runtime_error("Invalid A/size dataset");
+        }
+        if (!hprlp_dimensions_fit_int32(matrix_size[0], matrix_size[1])) {
+            throw std::runtime_error("unsupported HDF5 matrix dimensions");
         }
         const int m = static_cast<int>(matrix_size[0]);
         const int n = static_cast<int>(matrix_size[1]);
 
-        std::vector<int> colptr =
-            read_hdf5_dataset<int>(file, "A/colptr", H5T_NATIVE_INT);
+        std::vector<std::int64_t> colptr =
+            read_hdf5_dataset<std::int64_t>(
+                file, "A/colptr", H5T_NATIVE_INT64);
         std::vector<int> rowval =
             read_hdf5_dataset<int>(file, "A/rowval", H5T_NATIVE_INT);
         const std::vector<HPRLP_FLOAT> nzval =
@@ -210,10 +213,10 @@ static LP_info_cpu* create_model_from_hdf5_file(const std::string& path) {
 
         if (rowval.size() != nzval.size() ||
             rowval.size() >=
-                static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
             throw std::runtime_error("Invalid HDF5 sparse value arrays");
         }
-        const int nnz = static_cast<int>(rowval.size());
+        const std::int64_t nnz = static_cast<std::int64_t>(rowval.size());
         if (colptr.size() != static_cast<std::size_t>(n) + 1 ||
             c.size() != static_cast<std::size_t>(n) ||
             l.size() != static_cast<std::size_t>(n) ||
@@ -244,7 +247,7 @@ static LP_info_cpu* create_model_from_hdf5_file(const std::string& path) {
             --colptr[index];
         }
 
-        model = create_model_from_arrays_with_obj_constant(
+        model = create_model_from_arrays64_with_obj_constant(
             m, n, nnz, colptr.data(), rowval.data(), nzval.data(),
             AL.data(), AU.data(), l.data(), u.data(), c.data(),
             obj_constant, true);

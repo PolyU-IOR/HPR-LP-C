@@ -18,9 +18,11 @@ const API = HPRLPBatchAPI
 struct C_sparseMatrix
     row::Int32
     col::Int32
-    numElements::Int32
+    numElements::Int64
     colIndex::Ptr{Int32}
+    colIndex64::Ptr{Int64}
     rowPtr::Ptr{Int32}
+    rowPtr64::Ptr{Int64}
     value::Ptr{Float64}
 end
 
@@ -471,7 +473,9 @@ function create_model(path::String)
             matrix_size = Vector{Int64}(read(file, "A/size"))
             length(matrix_size) == 2 || error("Invalid A/size dataset")
             m, n = Int.(matrix_size)
-            colptr = Vector{Int32}(read(file, "A/colptr"))
+            0 <= m <= typemax(Int32) && 0 <= n <= typemax(Int32) ||
+                error("HPR-LP-C supports at most INT32_MAX rows and columns")
+            colptr = Vector{Int64}(read(file, "A/colptr"))
             rowval = Vector{Int32}(read(file, "A/rowval"))
             nzval = Vector{Float64}(read(file, "A/nzval"))
             c = Vector{Float64}(read(file, "c"))
@@ -496,10 +500,14 @@ function create_model(path::String)
             error("A/rowval contains an out-of-range row index")
         colptr .-= 1
         rowval .-= 1
+        if length(nzval) <= typemax(Int32)
+            colptr = Vector{Int32}(colptr)
+        end
         model_ptr = API.c_create_model_from_arrays_with_obj_constant(
             m, n, length(nzval), colptr, rowval, nzval,
             AL, AU, l, u, c, obj_constant, true,
         )
+        model_ptr == C_NULL && error("Failed to create model from HDF5 file: $path")
         return model_ptr, time() - read_start
     end
     return API.c_create_model_from_mps(path)

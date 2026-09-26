@@ -2,6 +2,7 @@
 #include "gpu/preprocessing/preprocess.h"
 #include "support/utils.h"
 #include <string.h>
+#include "support/dimension_limits.h"
 #include <ctype.h>
 #include <math.h>
 #include <cstdlib>
@@ -9,6 +10,11 @@
 #include <cerrno>
 #include <iostream>
 #include <string>
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+#include <new>
+#include <memory>
 #include <zlib.h>
 
 #define INITIAL_CAPACITY 8192
@@ -68,6 +74,12 @@ FILE* open_mps_stream(const char *filename) {
 }
 
 }  // namespace
+
+static void *realloc_checked(void *old_ptr, std::size_t bytes) {
+    void *next = std::realloc(old_ptr, bytes);
+    if (!next) throw std::bad_alloc();
+    return next;
+}
 
 /* Fast HPRLP_FLOAT parsing - atof is actually quite optimized in modern libc,
    but we can add inline hint */
@@ -191,13 +203,21 @@ void namemap_set(NameIndexMap *map, const char *name, int index) {
 
     /* Add new entry */
     if (map->size >= map->capacity) {
-        map->capacity *= 2;
-        map->pairs = (NameIndexPair*)realloc(map->pairs, map->capacity * sizeof(NameIndexPair));
+        if (map->capacity >= std::numeric_limits<int>::max()) {
+            throw std::bad_alloc();
+        }
+        map->capacity = map->capacity > std::numeric_limits<int>::max() / 2
+            ? std::numeric_limits<int>::max() : map->capacity * 2;
+        map->pairs = (NameIndexPair*)realloc_checked(map->pairs,
+            static_cast<std::size_t>(map->capacity) * sizeof(NameIndexPair));
 
         /* Rehash if load factor is too high */
-        if (map->size > map->num_buckets * 0.75) {
-            map->num_buckets *= 2;
-            map->buckets = (int*)realloc(map->buckets, map->num_buckets * sizeof(int));
+        if (map->size > map->num_buckets * 0.75 &&
+            map->num_buckets < std::numeric_limits<int>::max()) {
+            map->num_buckets = map->num_buckets > std::numeric_limits<int>::max() / 2
+                ? std::numeric_limits<int>::max() : map->num_buckets * 2;
+            map->buckets = (int*)realloc_checked(map->buckets,
+                static_cast<std::size_t>(map->num_buckets) * sizeof(int));
 
             /* Initialize new buckets */
             for (int i = 0; i < map->num_buckets; i++) {
@@ -244,7 +264,8 @@ static void estimate_problem_size(FILE *fp, int *est_vars, int *est_cons, int *e
 
     if (file_size > 0) {
         /* Rough heuristic: assume ~50 bytes per coefficient entry */
-        *est_nnz = (int)(file_size / 50);
+        *est_nnz = static_cast<int>(std::min<long>(
+            file_size / 50, 10000000L));
         /* Assume sparse matrices with ~10 entries per variable */
         *est_vars = (*est_nnz) / 10;
         *est_cons = (*est_vars) / 2;  /* Rough estimate */
@@ -301,14 +322,23 @@ QPSData* qpsdata_create_with_capacity(int var_cap, int con_cap, int nnz_cap) {
     qps->qvals = (HPRLP_FLOAT*)malloc(qps->qnnz_capacity * sizeof(HPRLP_FLOAT));
     qps->qnnz = 0;
 
-    qps->arows = (int*)malloc(qps->annz_capacity * sizeof(int));
-    qps->acols = (int*)malloc(qps->annz_capacity * sizeof(int));
-    qps->avals = (HPRLP_FLOAT*)malloc(qps->annz_capacity * sizeof(HPRLP_FLOAT));
+    qps->arows = (int*)malloc(static_cast<size_t>(qps->annz_capacity) * sizeof(int));
+    qps->acols = (int*)malloc(static_cast<size_t>(qps->annz_capacity) * sizeof(int));
+    qps->avals = (HPRLP_FLOAT*)malloc(static_cast<size_t>(qps->annz_capacity) * sizeof(HPRLP_FLOAT));
     qps->annz = 0;
 
     /* Initialize name maps */
     namemap_init(&qps->varindices);
     namemap_init(&qps->conindices);
+
+    if (!qps->c || !qps->lvar || !qps->uvar || !qps->varnames ||
+        !qps->vartypes || !qps->lcon || !qps->ucon ||
+        !qps->connames || !qps->contypes ||
+        !qps->qrows || !qps->qcols || !qps->qvals ||
+        !qps->arows || !qps->acols || !qps->avals) {
+        qpsdata_free(qps);
+        return NULL;
+    }
 
     /* Initialize NaN for bounds (will be set to defaults later) */
     for (int i = 0; i < qps->var_capacity; i++) {
@@ -346,12 +376,12 @@ void qpsdata_free(QPSData *qps) {
     free(qps->bndname);
     free(qps->rngname);
 
-    for (int i = 0; i < qps->nvar; i++) {
+    for (int i = 0; qps->varnames && i < qps->nvar; i++) {
         free(qps->varnames[i]);
     }
     free(qps->varnames);
 
-    for (int i = 0; i < qps->ncon; i++) {
+    for (int i = 0; qps->connames && i < qps->ncon; i++) {
         free(qps->connames[i]);
     }
     free(qps->connames);
@@ -628,6 +658,10 @@ void read_rows_line(QPSData *qps, MPSCard *card) {
 
     /* Regular constraint row */
     int ncon = qps->ncon;
+    if (!hprlp_dimensions_fit_int32(
+            static_cast<std::int64_t>(ncon) + 1, qps->nvar)) {
+        throw std::out_of_range("MPS row count exceeds INT32_MAX");
+    }
     int con_index = ncon + 1;  /* Constraints start at index 1 (0 is for objective) */
 
     /* Check for duplicate */
@@ -639,11 +673,18 @@ void read_rows_line(QPSData *qps, MPSCard *card) {
 
     /* Expand arrays if needed */
     if (ncon >= qps->con_capacity) {
-        qps->con_capacity *= 2;
-        qps->lcon = (HPRLP_FLOAT*)realloc(qps->lcon, qps->con_capacity * sizeof(HPRLP_FLOAT));
-        qps->ucon = (HPRLP_FLOAT*)realloc(qps->ucon, qps->con_capacity * sizeof(HPRLP_FLOAT));
-        qps->connames = (char**)realloc(qps->connames, qps->con_capacity * sizeof(char*));
-        qps->contypes = (RowType*)realloc(qps->contypes, qps->con_capacity * sizeof(RowType));
+        qps->con_capacity =
+            qps->con_capacity > std::numeric_limits<int>::max() / 2
+                ? std::numeric_limits<int>::max()
+                : qps->con_capacity * 2;
+        qps->lcon = (HPRLP_FLOAT*)realloc_checked(qps->lcon,
+            static_cast<std::size_t>(qps->con_capacity) * sizeof(HPRLP_FLOAT));
+        qps->ucon = (HPRLP_FLOAT*)realloc_checked(qps->ucon,
+            static_cast<std::size_t>(qps->con_capacity) * sizeof(HPRLP_FLOAT));
+        qps->connames = (char**)realloc_checked(qps->connames,
+            static_cast<std::size_t>(qps->con_capacity) * sizeof(char*));
+        qps->contypes = (RowType*)realloc_checked(qps->contypes,
+            static_cast<std::size_t>(qps->con_capacity) * sizeof(RowType));
     }
 
     namemap_set(&qps->conindices, rowname, con_index);
@@ -668,10 +709,26 @@ void read_rows_line(QPSData *qps, MPSCard *card) {
 /* Add entry to constraint matrix A */
 void add_constraint_entry(QPSData *qps, int row, int col, HPRLP_FLOAT val) {
     if (qps->annz >= qps->annz_capacity) {
-        qps->annz_capacity *= 2;
-        qps->arows = (int*)realloc(qps->arows, qps->annz_capacity * sizeof(int));
-        qps->acols = (int*)realloc(qps->acols, qps->annz_capacity * sizeof(int));
-        qps->avals = (HPRLP_FLOAT*)realloc(qps->avals, qps->annz_capacity * sizeof(HPRLP_FLOAT));
+        if (qps->annz_capacity <= 0 ||
+            qps->annz_capacity > std::numeric_limits<std::int64_t>::max() / 2) {
+            throw std::bad_alloc();
+        }
+        const auto next_capacity = qps->annz_capacity * 2;
+        const auto count = static_cast<std::size_t>(next_capacity);
+        if (count > std::numeric_limits<std::size_t>::max() /
+                        sizeof(HPRLP_FLOAT)) {
+            throw std::bad_alloc();
+        }
+        auto grow = [count](void *old, std::size_t element_size) {
+            void *result = realloc(old, count * element_size);
+            if (!result) throw std::bad_alloc();
+            return result;
+        };
+        qps->arows = static_cast<int*>(grow(qps->arows, sizeof(int)));
+        qps->acols = static_cast<int*>(grow(qps->acols, sizeof(int)));
+        qps->avals = static_cast<HPRLP_FLOAT*>(
+            grow(qps->avals, sizeof(HPRLP_FLOAT)));
+        qps->annz_capacity = next_capacity;
     }
 
     qps->arows[qps->annz] = row;
@@ -681,10 +738,10 @@ void add_constraint_entry(QPSData *qps, int row, int col, HPRLP_FLOAT val) {
 }
 
 /* Read COLUMNS section line - optimized version */
-void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
+bool read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
     if (card->nfields < 3) {
         std::cerr << "Error: Line " << card->nline << " contains only " << card->nfields << " fields\n";
-        return;
+        return true;
     }
 
     char *varname = card->f1;
@@ -693,14 +750,27 @@ void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
     /* Get or create variable */
     int col = namemap_get(&qps->varindices, varname, nvar);
     if (col == nvar) {
+        if (!hprlp_dimensions_fit_int32(
+                qps->ncon, static_cast<std::int64_t>(nvar) + 1)) {
+            return false;
+        }
+
         /* New variable */
         if (nvar >= qps->var_capacity) {
-            qps->var_capacity *= 2;
-            qps->c = (HPRLP_FLOAT*)realloc(qps->c, qps->var_capacity * sizeof(HPRLP_FLOAT));
-            qps->lvar = (HPRLP_FLOAT*)realloc(qps->lvar, qps->var_capacity * sizeof(HPRLP_FLOAT));
-            qps->uvar = (HPRLP_FLOAT*)realloc(qps->uvar, qps->var_capacity * sizeof(HPRLP_FLOAT));
-            qps->varnames = (char**)realloc(qps->varnames, qps->var_capacity * sizeof(char*));
-            qps->vartypes = (VariableType*)realloc(qps->vartypes, qps->var_capacity * sizeof(VariableType));
+            qps->var_capacity =
+                qps->var_capacity > std::numeric_limits<int>::max() / 2
+                    ? std::numeric_limits<int>::max()
+                    : qps->var_capacity * 2;
+            qps->c = (HPRLP_FLOAT*)realloc_checked(qps->c,
+                static_cast<std::size_t>(qps->var_capacity) * sizeof(HPRLP_FLOAT));
+            qps->lvar = (HPRLP_FLOAT*)realloc_checked(qps->lvar,
+                static_cast<std::size_t>(qps->var_capacity) * sizeof(HPRLP_FLOAT));
+            qps->uvar = (HPRLP_FLOAT*)realloc_checked(qps->uvar,
+                static_cast<std::size_t>(qps->var_capacity) * sizeof(HPRLP_FLOAT));
+            qps->varnames = (char**)realloc_checked(qps->varnames,
+                static_cast<std::size_t>(qps->var_capacity) * sizeof(char*));
+            qps->vartypes = (VariableType*)realloc_checked(qps->vartypes,
+                static_cast<std::size_t>(qps->var_capacity) * sizeof(VariableType));
 
             /* Initialize new entries */
             for (int i = nvar; i < qps->var_capacity; i++) {
@@ -748,6 +818,7 @@ void read_columns_line(QPSData *qps, MPSCard *card, bool integer_section) {
             std::cerr << "Error: Unknown row " << rowname2 << " at line " << card->nline << "\n";
         }
     }
+    return true;
 }
 
 /* Read RHS section line */
@@ -818,7 +889,7 @@ void read_rhs_line(QPSData *qps, MPSCard *card) {
 }
 
 /* Helper function to apply a range value to a constraint */
-static void apply_range_to_constraint(QPSData *qps, const char *rowname, HPRLP_FLOAT val, int line_num) {
+static void apply_range_to_constraint(QPSData *qps, const char *rowname, HPRLP_FLOAT val, std::int64_t line_num) {
     int row = namemap_get(&qps->conindices, rowname, -2);
     if (row == 0 || row == -1) {
         std::cerr << "Error: Encountered objective row " << rowname << " in RANGES section (l. " << line_num << ")\n";
@@ -988,11 +1059,11 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
     QPSData *qps = qpsdata_create_with_capacity(est_vars, est_cons, est_nnz);
     if (!qps) return NULL;
 
-    /* Use larger buffer for better I/O performance */
-    char *buffer = (char*)malloc(65536);  /* 64KB buffer */
-    if (buffer) {
-        setvbuf(fp, buffer, _IOFBF, 65536);
-    }
+    setvbuf(fp, nullptr, _IOFBF, 65536);
+    struct QPSGuard {
+        QPSData *value;
+        ~QPSGuard() { qpsdata_free(value); }
+    } guard{qps};
 
     MPSCard card;
     card.nline = 0;
@@ -1138,7 +1209,7 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
                 }
                 continue;
             }
-            read_columns_line(qps, &card, integer_section);
+            if (!read_columns_line(qps, &card, integer_section)) goto error;
         } else if (current_section == SECTION_RHS) {
             read_rhs_line(qps, &card);
         } else if (current_section == SECTION_BOUNDS) {
@@ -1154,8 +1225,6 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
         std::cerr << "Warning: Reached end of file before ENDATA section\n";
     }
 
-    /* Free I/O buffer */
-    if (buffer) free(buffer);
 
     /* Finalize variable bounds */
     for (int j = 0; j < qps->nvar; j++) {
@@ -1185,11 +1254,10 @@ QPSData* readqps_from_file(FILE *fp, MPSFormat format) {
         }
     }
 
+    guard.value = nullptr;
     return qps;
 
 error:
-    if (buffer) free(buffer);
-    qpsdata_free(qps);
     return NULL;
 }
 
@@ -1200,10 +1268,9 @@ QPSData* readqps(const char *filename, MPSFormat format) {
         return NULL;
     }
 
-    QPSData *qps = readqps_from_file(fp, format);
-    fclose(fp);
-
-    return qps;
+    auto close_stream = [](FILE *stream) { fclose(stream); };
+    std::unique_ptr<FILE, decltype(close_stream)> stream(fp, close_stream);
+    return readqps_from_file(stream.get(), format);
 }
 
 /* ============================================================================
@@ -1211,174 +1278,139 @@ QPSData* readqps(const char *filename, MPSFormat format) {
  * ========================================================================== */
 
 /* Create a CSR matrix structure */
-CSRMatrix* csr_create(int nrows, int ncols, int nnz) {
-    CSRMatrix *csr = (CSRMatrix*)malloc(sizeof(CSRMatrix));
+CSRMatrix* csr_create(int nrows, int ncols, std::int64_t nnz) {
+    if (nrows < 0 || ncols < 0 || nnz < 0 ||
+        static_cast<std::uint64_t>(nnz) >
+            std::numeric_limits<std::size_t>::max() / sizeof(HPRLP_FLOAT)) {
+        return NULL;
+    }
+    CSRMatrix *csr = (CSRMatrix*)calloc(1, sizeof(CSRMatrix));
     if (!csr) return NULL;
 
     csr->nrows = nrows;
     csr->ncols = ncols;
     csr->nnz = nnz;
+    const bool use_i64 = nnz > std::numeric_limits<int>::max();
+    if (use_i64) {
+        csr->row_ptr64 = (std::int64_t*)malloc(
+            (static_cast<std::size_t>(nrows) + 1) * sizeof(std::int64_t));
+    } else {
+        csr->row_ptr = (int*)malloc(
+            (static_cast<std::size_t>(nrows) + 1) * sizeof(int));
+    }
+    if (nnz > 0) {
+        const std::size_t count = static_cast<std::size_t>(nnz);
+        csr->col_idx = (int*)malloc(count * sizeof(int));
+        csr->values = (HPRLP_FLOAT*)malloc(count * sizeof(HPRLP_FLOAT));
+    }
 
-    csr->row_ptr = (int*)malloc((nrows + 1) * sizeof(int));
-    csr->col_idx = (int*)malloc(nnz * sizeof(int));
-    csr->values = (HPRLP_FLOAT*)malloc(nnz * sizeof(HPRLP_FLOAT));
-
-    if (!csr->row_ptr || !csr->col_idx || !csr->values) {
+    if ((!csr->row_ptr && !csr->row_ptr64) ||
+        (nnz > 0 && (!csr->col_idx || !csr->values))) {
         csr_free(csr);
         return NULL;
     }
-
     return csr;
 }
 
-/* Free a CSR matrix */
 void csr_free(CSRMatrix *csr) {
     if (!csr) return;
     free(csr->row_ptr);
+    free(csr->row_ptr64);
     free(csr->col_idx);
     free(csr->values);
     free(csr);
 }
 
-/* Comparison function for qsort (sort by row, then column) */
-static int compare_coo_entries(const void *a, const void *b) {
-    typedef struct { int row; int col; HPRLP_FLOAT val; } COOEntry;
-    const COOEntry *ea = (const COOEntry *)a;
-    const COOEntry *eb = (const COOEntry *)b;
+struct HPRLPCOOEntry {
+    int row;
+    int col;
+    HPRLP_FLOAT val;
+};
 
-    if (ea->row != eb->row) {
-        return ea->row - eb->row;
-    }
-    return ea->col - eb->col;
+static int compare_coo_entries(const void *a, const void *b) {
+    const HPRLPCOOEntry *ea = (const HPRLPCOOEntry *)a;
+    const HPRLPCOOEntry *eb = (const HPRLPCOOEntry *)b;
+    if (ea->row != eb->row) return ea->row < eb->row ? -1 : 1;
+    if (ea->col != eb->col) return ea->col < eb->col ? -1 : 1;
+    return 0;
 }
 
-/* Convert COO (Coordinate) format to CSR (Compressed Sparse Row) format
- *
- * Parameters:
- *   nrows: Number of rows in the matrix
- *   ncols: Number of columns in the matrix
- *   nnz: Number of nonzero entries
- *   row_indices: Array of row indices (size: nnz)
- *   col_indices: Array of column indices (size: nnz)
- *   values: Array of values (size: nnz)
- *
- * Returns:
- *   Pointer to newly allocated CSRMatrix, or NULL on failure
- *
- * Note: This function sorts the input data and handles duplicate entries
- *       by summing their values (as per standard sparse matrix conventions)
- */
-CSRMatrix* coo_to_csr(int nrows, int ncols, int nnz,
+static void set_csr_offset(CSRMatrix *csr, int row, std::int64_t value) {
+    if (csr->row_ptr64) csr->row_ptr64[row] = value;
+    else csr->row_ptr[row] = static_cast<int>(value);
+}
+
+CSRMatrix* coo_to_csr(int nrows, int ncols, std::int64_t nnz,
                       const int *row_indices, const int *col_indices,
                       const HPRLP_FLOAT *values) {
+    if (nnz < 0 ||
+        static_cast<std::uint64_t>(nnz) >
+            std::numeric_limits<std::size_t>::max() /
+                sizeof(HPRLPCOOEntry)) return NULL;
     if (nnz == 0) {
-        /* Create empty matrix */
         CSRMatrix *csr = csr_create(nrows, ncols, 0);
         if (csr) {
-            for (int i = 0; i <= nrows; i++) {
-                csr->row_ptr[i] = 0;
-            }
+            for (int i = 0; i <= nrows; ++i) set_csr_offset(csr, i, 0);
         }
         return csr;
     }
 
-    /* Create temporary array for sorting */
-    typedef struct { int row; int col; HPRLP_FLOAT val; } COOEntry;
-    COOEntry *entries = (COOEntry*)malloc(nnz * sizeof(COOEntry));
+    const std::size_t count = static_cast<std::size_t>(nnz);
+    HPRLPCOOEntry *entries =
+        (HPRLPCOOEntry*)malloc(count * sizeof(HPRLPCOOEntry));
     if (!entries) return NULL;
-
-    /* Copy data to temporary array */
-    for (int i = 0; i < nnz; i++) {
+    for (std::int64_t i = 0; i < nnz; ++i) {
         entries[i].row = row_indices[i];
         entries[i].col = col_indices[i];
         entries[i].val = values[i];
     }
+    qsort(entries, count, sizeof(HPRLPCOOEntry), compare_coo_entries);
 
-    /* Sort by row, then by column */
-    qsort(entries, nnz, sizeof(COOEntry), compare_coo_entries);
-
-    /* Count unique entries and sum duplicates */
-    int unique_nnz = 1;
-    for (int i = 1; i < nnz; i++) {
-        if (entries[i].row != entries[i-1].row ||
-            entries[i].col != entries[i-1].col) {
-            unique_nnz++;
+    std::int64_t unique_nnz = 1;
+    for (std::int64_t i = 1; i < nnz; ++i) {
+        if (entries[i].row != entries[i - 1].row ||
+            entries[i].col != entries[i - 1].col) {
+            ++unique_nnz;
         }
     }
-
-    /* Create CSR matrix */
     CSRMatrix *csr = csr_create(nrows, ncols, unique_nnz);
     if (!csr) {
         free(entries);
         return NULL;
     }
 
-    /* Build CSR structure */
-    int csr_idx = 0;
-
-    /* Initialize row_ptr */
-    for (int i = 0; i <= nrows; i++) {
-        csr->row_ptr[i] = 0;
-    }
-
-    /* Fill in the first entry */
-    csr->col_idx[0] = entries[0].col;
-    csr->values[0] = entries[0].val;
-    csr_idx = 1;
-
-    /* Process remaining entries */
-    for (int i = 1; i < nnz; i++) {
-        if (entries[i].row == entries[i-1].row &&
-            entries[i].col == entries[i-1].col) {
-            /* Duplicate entry - sum the values */
+    int completed_row = 0;
+    std::int64_t csr_idx = 0;
+    set_csr_offset(csr, 0, 0);
+    for (std::int64_t i = 0; i < nnz; ++i) {
+        if (i > 0 && entries[i].row == entries[i - 1].row &&
+            entries[i].col == entries[i - 1].col) {
             csr->values[csr_idx - 1] += entries[i].val;
-        } else {
-            /* New entry */
-            csr->col_idx[csr_idx] = entries[i].col;
-            csr->values[csr_idx] = entries[i].val;
-            csr_idx++;
+            continue;
         }
-    }
-
-    /* Build row_ptr array */
-    int row = 0;
-    csr->row_ptr[0] = 0;
-
-    for (int i = 0; i < unique_nnz; i++) {
-        /* Find which row this entry belongs to */
-        int entry_row = entries[i].row;
-
-        /* Fill row_ptr for all rows up to and including this entry's row */
-        while (row < entry_row) {
-            row++;
-            csr->row_ptr[row] = i;
+        while (completed_row < entries[i].row) {
+            ++completed_row;
+            set_csr_offset(csr, completed_row, csr_idx);
         }
+        csr->col_idx[csr_idx] = entries[i].col;
+        csr->values[csr_idx] = entries[i].val;
+        ++csr_idx;
     }
-
-    /* Fill remaining row pointers */
-    while (row < nrows) {
-        row++;
-        csr->row_ptr[row] = unique_nnz;
+    while (completed_row < nrows) {
+        ++completed_row;
+        set_csr_offset(csr, completed_row, csr_idx);
     }
 
     free(entries);
     return csr;
 }
 
-/* Get the constraint matrix A in CSR format from QPSData
- *
- * This is a convenience function that converts the COO format
- * matrix stored in QPSData to CSR format.
- *
- * Returns:
- *   Pointer to newly allocated CSRMatrix, or NULL on failure
- */
 CSRMatrix* qpsdata_get_csr_matrix(const QPSData *qps) {
     if (!qps) return NULL;
-
     return coo_to_csr(qps->ncon, qps->nvar, qps->annz,
                       qps->arows, qps->acols, qps->avals);
 }
+
 
 /*
  * Formulation function from arrays - takes matrix and bounds arrays
@@ -1412,7 +1444,7 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
 
     int m = csr_A->nrows;
     int n = csr_A->ncols;
-    int nnz = csr_A->nnz;
+    const std::int64_t nnz = csr_A->nnz;
 
     /* Validate dimensions */
     if (m <= 0 || n <= 0 || nnz <= 0) {
@@ -1421,12 +1453,18 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     }
 
     /* Validate CSR structure */
-    if (csr_A->row_ptr[0] != 0) {
-        std::cerr << "Error: Invalid CSR format: row_ptr[0] = " << csr_A->row_ptr[0] << ", expected 0\n";
+    const std::int64_t first_offset = csr_A->row_ptr64
+        ? csr_A->row_ptr64[0] : csr_A->row_ptr[0];
+    const std::int64_t final_offset = csr_A->row_ptr64
+        ? csr_A->row_ptr64[m] : csr_A->row_ptr[m];
+    if (first_offset != 0) {
+        std::cerr << "Error: Invalid CSR format: first offset = "
+                  << first_offset << ", expected 0\n";
         return;
     }
-    if (csr_A->row_ptr[m] != nnz) {
-        std::cerr << "Error: Invalid CSR format: row_ptr[" << m << "] = " << csr_A->row_ptr[m] << ", expected " << nnz << "\n";
+    if (final_offset != nnz) {
+        std::cerr << "Error: Invalid CSR format: final offset = "
+                  << final_offset << ", expected " << nnz << "\n";
         return;
     }
 
@@ -1447,7 +1485,7 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     lp->obj_constant = 0.0;
 
     /* Allocate and populate constraint matrix A */
-    lp->A = (sparseMatrix*)malloc(sizeof(sparseMatrix));
+    lp->A = (sparseMatrix*)calloc(1, sizeof(sparseMatrix));
     if (!lp->A) {
         std::cerr << "Error: Failed to allocate sparse matrix structure for model build\n";
         lp->m = 0;
@@ -1457,13 +1495,19 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
     lp->A->row = m;
     lp->A->col = n;
     lp->A->numElements = nnz;
-    lp->A->rowPtr = nullptr;
-    lp->A->colIndex = nullptr;
-    lp->A->value = nullptr;
-    lp->A->rowPtr = (int*)malloc((m + 1) * sizeof(int));
-    lp->A->colIndex = (int*)malloc(nnz * sizeof(int));
-    lp->A->value = (HPRLP_FLOAT*)malloc(nnz * sizeof(HPRLP_FLOAT));
-    if (!lp->A->rowPtr || !lp->A->colIndex || !lp->A->value) {
+    const std::size_t nnz_count = static_cast<std::size_t>(nnz);
+    const std::size_t offset_count = static_cast<std::size_t>(m) + 1;
+    if (csr_A->row_ptr64) {
+        lp->A->rowPtr64 = (std::int64_t*)malloc(
+            offset_count * sizeof(std::int64_t));
+    } else {
+        lp->A->rowPtr = (int*)malloc(offset_count * sizeof(int));
+    }
+    lp->A->colIndex = (int*)malloc(nnz_count * sizeof(int));
+    lp->A->value = (HPRLP_FLOAT*)malloc(
+        nnz_count * sizeof(HPRLP_FLOAT));
+    if ((!lp->A->rowPtr && !lp->A->rowPtr64) ||
+        !lp->A->colIndex || !lp->A->value) {
         std::cerr << "Error: Failed to allocate constraint matrix arrays for model build\n";
         free_lp_info_cpu(lp);
         lp->m = 0;
@@ -1471,9 +1515,15 @@ void build_model_from_arrays(const CSRMatrix *csr_A,
         return;
     }
 
-    memcpy(lp->A->rowPtr, csr_A->row_ptr, (m + 1) * sizeof(int));
-    memcpy(lp->A->colIndex, csr_A->col_idx, nnz * sizeof(int));
-    memcpy(lp->A->value, csr_A->values, nnz * sizeof(HPRLP_FLOAT));
+    if (csr_A->row_ptr64) {
+        memcpy(lp->A->rowPtr64, csr_A->row_ptr64,
+               offset_count * sizeof(std::int64_t));
+    } else {
+        memcpy(lp->A->rowPtr, csr_A->row_ptr, offset_count * sizeof(int));
+    }
+    memcpy(lp->A->colIndex, csr_A->col_idx, nnz_count * sizeof(int));
+    memcpy(lp->A->value, csr_A->values,
+           nnz_count * sizeof(HPRLP_FLOAT));
 
     /* Allocate and copy constraint bounds */
     lp->AL = (HPRLP_FLOAT*)malloc(m * sizeof(HPRLP_FLOAT));
@@ -1523,6 +1573,18 @@ void build_model_from_mps(const char* mps_fp, LP_info_cpu *lp) {
         std::cerr << "Error: Failed to read MPS file\n";
         return;
     }
+
+    // Names are not part of the numeric model. Release parsing metadata
+    // before allocating the COO sort workspace and CSR copies.
+    for (int i = 0; i < qps->nvar; ++i) free(qps->varnames[i]);
+    free(qps->varnames);
+    qps->varnames = nullptr;
+    for (int i = 0; i < qps->ncon; ++i) free(qps->connames[i]);
+    free(qps->connames);
+    qps->connames = nullptr;
+    namemap_free(&qps->varindices);
+    namemap_free(&qps->conindices);
+
 
     /* Convert COO matrix to CSR format */
     CSRMatrix *csr_A = qpsdata_get_csr_matrix(qps);

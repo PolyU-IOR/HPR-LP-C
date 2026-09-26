@@ -2,6 +2,9 @@
 #include "api/structs.h"
 #include "gpu/memory/compressible_memory.h"
 #include <cstdlib>
+#include <new>
+#include <algorithm>
+#include <vector>
 
 void set_vector_value_device(HPRLP_FLOAT *x, int n, HPRLP_FLOAT value){
     set_vector_value_device_kernel<<<HPRLP_NUM_BLOCKS(n), HPRLP_NUM_THREADS>>>(x, n, value);
@@ -27,29 +30,107 @@ void vector_dot_product(HPRLP_FLOAT *x, HPRLP_FLOAT *y, HPRLP_FLOAT *result, int
 
 
 void CSR_A_row_norm(const sparseMatrix *A, HPRLP_FLOAT *result, int norm) {
-    CSR_A_row_norm_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, result, norm);
+    if (hprlp_sparse_has_64bit_offsets(A)) {
+        CSR_A_row_norm_kernel64<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+            A->row, A->rowPtr64, A->colIndex64, A->value, result, norm);
+    } else {
+        CSR_A_row_norm_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+            A->row, A->rowPtr, A->colIndex, A->value, result, norm);
+    }
 }
 
 void mul_CSR_A_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide) {
-    mul_CSR_A_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    if (hprlp_sparse_has_64bit_offsets(A)) {
+        mul_CSR_A_row_kernel64<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+            A->row, A->rowPtr64, A->colIndex64, A->value, x, divide);
+    } else {
+        mul_CSR_A_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+            A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    }
 }
 
 
 void mul_CSR_AT_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide) {
-    mul_CSR_AT_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    if (hprlp_sparse_has_64bit_offsets(A)) {
+        if (hprlp_sparse_has_64bit_column_indices(A)) {
+            mul_CSR_AT_row_kernel64<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+                A->row, A->rowPtr64, A->colIndex64, A->value, x, divide);
+        } else {
+            mul_CSR_AT_row_kernel64_mixed<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+                A->row, A->rowPtr64, A->colIndex, A->value, x, divide);
+        }
+    } else {
+        mul_CSR_AT_row_kernel<<<HPRLP_NUM_BLOCKS(A->row), HPRLP_NUM_THREADS>>>(
+            A->row, A->rowPtr, A->colIndex, A->value, x, divide);
+    }
 }
 
-void transfer_CSR_matrix(const sparseMatrix *A, sparseMatrix* d_A) {
+void transfer_CSR_matrix(const sparseMatrix *A, sparseMatrix* d_A,
+                         bool keep_32bit_columns) {
     d_A->row = A->row;
     d_A->col = A->col;
     d_A->numElements = A->numElements;
+    d_A->rowPtr = nullptr;
+    d_A->rowPtr64 = nullptr;
+    d_A->colIndex = nullptr;
+    d_A->colIndex64 = nullptr;
+    d_A->value = nullptr;
 
-    CUDA_CHECK(hprlp_device_malloc_compressible(&d_A->value, A->numElements * sizeof(HPRLP_FLOAT)));
-    CUDA_CHECK(hprlp_device_malloc_compressible(&d_A->colIndex, A->numElements * sizeof(int)));
-    CUDA_CHECK(hprlp_device_malloc_compressible(&d_A->rowPtr, (A->row + 1) * sizeof(int)));
-    CUDA_CHECK(cudaMemcpy(d_A->value, A->value, A->numElements * sizeof(HPRLP_FLOAT), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_A->colIndex, A->colIndex, A->numElements * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_A->rowPtr, A->rowPtr, (A->row+1) * sizeof(int), cudaMemcpyHostToDevice));
+    const std::size_t nonzeros = static_cast<std::size_t>(A->numElements);
+    const std::size_t offsets = static_cast<std::size_t>(A->row) + 1;
+    if (hprlp_sparse_has_64bit_offsets(A)) {
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &d_A->value, nonzeros * sizeof(HPRLP_FLOAT)));
+        if (keep_32bit_columns) {
+            CUDA_CHECK(hprlp_device_malloc_compressible(
+                &d_A->colIndex, nonzeros * sizeof(int)));
+        } else {
+            CUDA_CHECK(hprlp_device_malloc_compressible(
+                &d_A->colIndex64, nonzeros * sizeof(std::int64_t)));
+        }
+        CUDA_CHECK(hprlp_device_malloc_compressible(
+            &d_A->rowPtr64, offsets * sizeof(std::int64_t)));
+        CUDA_CHECK(cudaMemcpy(d_A->value, A->value,
+            nonzeros * sizeof(HPRLP_FLOAT), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_A->rowPtr64, A->rowPtr64,
+            offsets * sizeof(std::int64_t), cudaMemcpyHostToDevice));
+
+        if (keep_32bit_columns) {
+            // CUDA 13.3+ SpMVOp accepts 64-bit offsets with 32-bit IDs.
+            CUDA_CHECK(cudaMemcpy(d_A->colIndex, A->colIndex,
+                nonzeros * sizeof(int), cudaMemcpyHostToDevice));
+        } else {
+            // SpMV and SpMM require matching 64-bit offset/index widths.
+            const std::size_t chunk_size =
+                std::min<std::size_t>(nonzeros, 1u << 20);
+            std::vector<std::int64_t> widened(chunk_size);
+            for (std::size_t base = 0; base < nonzeros; base += chunk_size) {
+                const std::size_t count =
+                    std::min(chunk_size, nonzeros - base);
+                for (std::size_t i = 0; i < count; ++i) {
+                    widened[i] = A->colIndex[base + i];
+                }
+                CUDA_CHECK(cudaMemcpy(d_A->colIndex64 + base,
+                    widened.data(), count * sizeof(std::int64_t),
+                    cudaMemcpyHostToDevice));
+            }
+        }
+        return;
+    }
+    CUDA_CHECK(hprlp_device_malloc_compressible(
+        &d_A->value, nonzeros * sizeof(HPRLP_FLOAT)));
+    CUDA_CHECK(hprlp_device_malloc_compressible(
+        &d_A->colIndex, nonzeros * sizeof(int)));
+    CUDA_CHECK(hprlp_device_malloc_compressible(
+        &d_A->rowPtr, offsets * sizeof(int)));
+    CUDA_CHECK(cudaMemcpy(d_A->value, A->value,
+                          nonzeros * sizeof(HPRLP_FLOAT),
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_A->colIndex, A->colIndex,
+                          nonzeros * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_A->rowPtr, A->rowPtr,
+                          offsets * sizeof(int),
+                          cudaMemcpyHostToDevice));
 }
 
 void vMemcpy_device(HPRLP_FLOAT *dst, HPRLP_FLOAT *src, int n) {
@@ -209,30 +290,55 @@ void collect_solution(HPRLP_workspace_gpu *workspace, Scaling_info *scaling_info
 
 /* CSR Matrix transpose (host utility) */
 void CSR_transpose_host(sparseMatrix A, sparseMatrix *AT) {
+    *AT = sparseMatrix{};
     AT->row = A.col;
     AT->col = A.row;
     AT->numElements = A.numElements;
-    AT->value = (HPRLP_FLOAT*)malloc(AT->numElements * sizeof(HPRLP_FLOAT));
-    AT->colIndex = (int*)malloc(AT->numElements * sizeof(int));
-    AT->rowPtr = (int*)malloc((AT->row + 2) * sizeof(int));
+    const std::size_t nonzeros = static_cast<std::size_t>(AT->numElements);
+    AT->value = (HPRLP_FLOAT*)malloc(nonzeros * sizeof(HPRLP_FLOAT));
+    AT->colIndex = (int*)malloc(nonzeros * sizeof(int));
 
-    for (int i = 0; i < AT->row + 2; i++) {
-        AT->rowPtr[i] = 0;
+    if (hprlp_sparse_has_64bit_offsets(&A)) {
+        AT->rowPtr64 = (std::int64_t*)calloc(
+            static_cast<std::size_t>(AT->row) + 2,
+            sizeof(std::int64_t));
+        if (!AT->value || !AT->colIndex || !AT->rowPtr64) {
+            throw std::bad_alloc();
+        }
+        for (std::int64_t i = 0; i < A.numElements; ++i) {
+            ++AT->rowPtr64[static_cast<std::size_t>(A.colIndex[i]) + 2];
+        }
+        for (std::size_t i = 2; i < static_cast<std::size_t>(AT->row) + 2; ++i) {
+            AT->rowPtr64[i] += AT->rowPtr64[i - 1];
+        }
+        for (int i = 0; i < A.row; ++i) {
+            for (std::int64_t j = A.rowPtr64[i];
+                 j < A.rowPtr64[i + 1]; ++j) {
+                const int col = A.colIndex[j];
+                const std::int64_t index = AT->rowPtr64[col + 1]++;
+                AT->value[index] = A.value[j];
+                AT->colIndex[index] = i;
+            }
+        }
+        return;
     }
 
-    for (int i = 0; i < A.numElements; i++) {
-        AT->rowPtr[A.colIndex[i] + 2]++;
+    // Preserve the original int32 transpose path for ordinary models.
+    AT->rowPtr = (int*)calloc(
+        static_cast<std::size_t>(AT->row) + 2, sizeof(int));
+    if (!AT->value || !AT->colIndex || !AT->rowPtr) {
+        throw std::bad_alloc();
     }
-
-    AT->rowPtr[0] = 0;
-    for (int i = 2; i < AT->row + 2; i++) {
+    for (int i = 0; i < A.numElements; ++i) {
+        ++AT->rowPtr[static_cast<std::size_t>(A.colIndex[i]) + 2];
+    }
+    for (std::size_t i = 2; i < static_cast<std::size_t>(AT->row) + 2; ++i) {
         AT->rowPtr[i] += AT->rowPtr[i - 1];
     }
-
-    for (int i = 0; i < A.row; i++) {
-        for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; j++) {
-            int col = A.colIndex[j];
-            int index = AT->rowPtr[col + 1]++;
+    for (int i = 0; i < A.row; ++i) {
+        for (int j = A.rowPtr[i]; j < A.rowPtr[i + 1]; ++j) {
+            const int col = A.colIndex[j];
+            const int index = AT->rowPtr[col + 1]++;
             AT->value[index] = A.value[j];
             AT->colIndex[index] = i;
         }

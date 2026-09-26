@@ -38,7 +38,8 @@ void mul_CSR_A_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide);         // row
 
 void mul_CSR_AT_row(sparseMatrix *A, HPRLP_FLOAT *x, bool divide);        // col-wise scaling
 
-void transfer_CSR_matrix(const sparseMatrix *A, sparseMatrix* d_A);
+void transfer_CSR_matrix(const sparseMatrix *A, sparseMatrix* d_A,
+                         bool keep_32bit_columns = false);
 
 
 /*---------- z = ax (a simple extension to in-place <Dscal> operation) ----------*/

@@ -43,10 +43,11 @@ enum RowType {
 struct CSRMatrix {
     int nrows;          /* Number of rows */
     int ncols;          /* Number of columns */
-    int nnz;            /* Number of nonzeros */
-    int *row_ptr;       /* Row pointers (size: nrows+1) */
-    int *col_idx;       /* Column indices (size: nnz) */
-    HPRLP_FLOAT *values;     /* Values (size: nnz) */
+    std::int64_t nnz;   /* Number of nonzeros */
+    int *row_ptr;             /* nrows + 1 offsets, nnz <= INT32_MAX */
+    std::int64_t *row_ptr64; /* nrows + 1 offsets, nnz > INT32_MAX */
+    int *col_idx;             /* nnz entries; each ID < ncols (int32) */
+    HPRLP_FLOAT *values;     /* nnz coefficient values */
 };
 
 /* Objective sense */
@@ -113,8 +114,8 @@ struct QPSData {
     HPRLP_FLOAT *qvals;      /* Values */
     
     /* Constraint matrix A in COO format */
-    int annz;           /* Number of nonzeros in A */
-    int annz_capacity;  /* Allocated capacity */
+    std::int64_t annz;          /* Number of nonzeros in A */
+    std::int64_t annz_capacity;  /* Allocated capacity */
     int *arows;         /* Row indices */
     int *acols;         /* Column indices */
     HPRLP_FLOAT *avals;      /* Values */
@@ -150,7 +151,7 @@ struct QPSData {
 
 /* MPS Card structure for parsing */
 struct MPSCard {
-    int nline;          /* Line number */
+    std::int64_t nline; /* Line number; large MPS files can exceed INT32_MAX lines */
     bool iscomment;     /* Is this line a comment? */
     bool isheader;      /* Is this line a section header? */
     int nfields;        /* Number of fields read */
@@ -173,6 +174,9 @@ void qpsdata_free(QPSData *qps);
 
 /* Main reading function */
 QPSData* readqps(const char *filename, MPSFormat format);
+/* Returns false when adding a column would exceed the int32 core limit. */
+bool read_columns_line(QPSData *qps, MPSCard *card, bool integer_section);
+
 QPSData* readqps_from_file(std::FILE *fp, MPSFormat format);
 
 /* Name-index map functions */
@@ -186,9 +190,9 @@ void trim(char *str);
 char* strdup_safe(const char *str);
 
 /* CSR matrix functions */
-CSRMatrix* csr_create(int nrows, int ncols, int nnz);
+CSRMatrix* csr_create(int nrows, int ncols, std::int64_t nnz);
 void csr_free(CSRMatrix *csr);
-CSRMatrix* coo_to_csr(int nrows, int ncols, int nnz, 
+CSRMatrix* coo_to_csr(int nrows, int ncols, std::int64_t nnz,
                       const int *row_indices, const int *col_indices, 
                       const HPRLP_FLOAT *values);
 CSRMatrix* qpsdata_get_csr_matrix(const QPSData *qps);

@@ -290,7 +290,9 @@ void free_lp_info(LP_info_gpu *lp_info) {
     // Free sparse matrices A and AT
     if (lp_info->A) {
         free_device_allocation(lp_info->A->rowPtr);
+        free_device_allocation(lp_info->A->rowPtr64);
         free_device_allocation(lp_info->A->colIndex);
+        free_device_allocation(lp_info->A->colIndex64);
         free_device_allocation(lp_info->A->value);
         delete lp_info->A;
         lp_info->A = nullptr;
@@ -298,7 +300,9 @@ void free_lp_info(LP_info_gpu *lp_info) {
 
     if (lp_info->AT) {
         free_device_allocation(lp_info->AT->rowPtr);
+        free_device_allocation(lp_info->AT->rowPtr64);
         free_device_allocation(lp_info->AT->colIndex);
+        free_device_allocation(lp_info->AT->colIndex64);
         free_device_allocation(lp_info->AT->value);
         delete lp_info->AT;
         lp_info->AT = nullptr;
@@ -425,7 +429,9 @@ void free_lp_info_cpu(LP_info_cpu *lp_info) {
     // Free sparse matrix A
     if (lp_info->A) {
         if (lp_info->A->rowPtr) free(lp_info->A->rowPtr);
+        if (lp_info->A->rowPtr64) free(lp_info->A->rowPtr64);
         if (lp_info->A->colIndex) free(lp_info->A->colIndex);
+        if (lp_info->A->colIndex64) free(lp_info->A->colIndex64);
         if (lp_info->A->value) free(lp_info->A->value);
         free(lp_info->A);
         lp_info->A = nullptr;

@@ -65,6 +65,8 @@ void allocate_memory(HPRLP_workspace_gpu *workspace, LP_info_gpu *lp_info_gpu) {
     workspace->reduced_backend_autotune_done = false;
     workspace->all_positive_unit_coefficients = lp_info_gpu->all_positive_unit_coefficients;
     workspace->uniform_unit_sign = lp_info_gpu->uniform_unit_sign;
+    workspace->wide_signed_unit_ready =
+        lp_info_gpu->A->rowPtr64 && lp_info_gpu->mixed_signed_unit_coefficients;
     workspace->all_zero_lower_unbounded_variables =
         lp_info_gpu->all_zero_lower_unbounded_variables;
     workspace->unit_operator_x_ready = false;

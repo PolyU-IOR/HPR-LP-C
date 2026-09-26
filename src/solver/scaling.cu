@@ -258,6 +258,159 @@ bool curtis_reid_scale_spread_is_safe(
     return accepted;
 }
 
+template <typename ColumnIndex>
+__global__ void curtis_reid_log_update_kernel64(int m,
+                                              const std::int64_t *rowPtr,
+                                              const ColumnIndex *colIndex,
+                                              const HPRLP_FLOAT *value,
+                                              const HPRLP_FLOAT *neg_log_abs_value,
+                                              const HPRLP_FLOAT *other_log_scale,
+                                              HPRLP_FLOAT *result) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    const int lane = threadIdx.x % warpSize;
+    const int warp_base = threadIdx.x - lane;
+    const std::int64_t start = row < m ? rowPtr[row] : 0;
+    const std::int64_t end = row < m ? rowPtr[row + 1] : 0;
+    const std::int64_t count = end - start;
+    const bool cooperative =
+        row < m && count > kScalingCooperativeRowThreshold;
+
+    // A warp services only the exceptionally long rows among its 32 ordinary
+    // row assignments.  The lanes preload one CSR-order tile, while lane zero
+    // performs every addition in the original left-to-right order.  This
+    // exposes memory-level parallelism without reassociating the reduction.
+    __shared__ HPRLP_FLOAT ordered_terms[HPRLP_NUM_THREADS];
+    unsigned cooperative_rows =
+        __ballot_sync(kScalingFullWarpMask, cooperative);
+    while (cooperative_rows != 0u) {
+        const int owner_lane = __ffs(cooperative_rows) - 1;
+        const int cooperative_row =
+            __shfl_sync(kScalingFullWarpMask, row, owner_lane);
+        const std::int64_t cooperative_start =
+            __shfl_sync(kScalingFullWarpMask, start, owner_lane);
+        const std::int64_t cooperative_end =
+            __shfl_sync(kScalingFullWarpMask, end, owner_lane);
+        const std::int64_t cooperative_count = cooperative_end - cooperative_start;
+
+        HPRLP_FLOAT sum = 0.0;
+        for (std::int64_t base = cooperative_start;
+             base < cooperative_end; base += warpSize) {
+            const std::int64_t idx = base + lane;
+            HPRLP_FLOAT ordered_term = 0.0;
+            if (idx < cooperative_end) {
+                HPRLP_FLOAT term;
+                if (neg_log_abs_value != nullptr) {
+                    term = neg_log_abs_value[idx];
+                } else {
+                    const HPRLP_FLOAT abs_value =
+                        fmax(fabs(value[idx]), 1e-300);
+                    term = -log(abs_value);
+                }
+                ordered_term =
+                    term - other_log_scale[colIndex[idx]];
+            }
+            ordered_terms[threadIdx.x] = ordered_term;
+            __syncwarp(kScalingFullWarpMask);
+
+            if (lane == 0) {
+                const int tile_count =
+                    cooperative_end - base < warpSize
+                        ? cooperative_end - base
+                        : warpSize;
+                for (int offset = 0; offset < tile_count; ++offset) {
+                    sum += ordered_terms[warp_base + offset];
+                }
+            }
+            __syncwarp(kScalingFullWarpMask);
+        }
+        if (lane == 0) {
+            result[cooperative_row] =
+                sum / static_cast<HPRLP_FLOAT>(cooperative_count);
+        }
+        cooperative_rows &= cooperative_rows - 1u;
+    }
+
+    if (row >= m || cooperative) {
+        return;
+    }
+    if (count <= 0) {
+        result[row] = 0.0;
+        return;
+    }
+
+    HPRLP_FLOAT sum = 0.0;
+    for (std::int64_t idx = start; idx < end; ++idx) {
+        HPRLP_FLOAT term;
+        if (neg_log_abs_value != nullptr) {
+            term = neg_log_abs_value[idx];
+        } else {
+            const HPRLP_FLOAT abs_value = fmax(fabs(value[idx]), 1e-300);
+            term = -log(abs_value);
+        }
+        // Cached and uncached execution converge here so the subtraction and
+        // row accumulation use one compiled instruction sequence.
+        sum += term - other_log_scale[colIndex[idx]];
+    }
+
+    result[row] = sum / static_cast<HPRLP_FLOAT>(count);
+}
+
+template <typename ColumnIndex>
+__global__ void apply_curtis_reid_csr_kernel64(
+    int rows, const std::int64_t *row_ptr, const ColumnIndex *col_index,
+    HPRLP_FLOAT *values, const HPRLP_FLOAT *row_scale,
+    const HPRLP_FLOAT *col_scale) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    const int lane = threadIdx.x % warpSize;
+    const std::int64_t start = row < rows ? row_ptr[row] : 0;
+    const std::int64_t end = row < rows ? row_ptr[row + 1] : 0;
+    const bool cooperative =
+        row < rows && end - start > kScalingCooperativeRowThreshold;
+
+    unsigned cooperative_rows =
+        __ballot_sync(kScalingFullWarpMask, cooperative);
+    while (cooperative_rows != 0u) {
+        const int owner_lane = __ffs(cooperative_rows) - 1;
+        const int cooperative_row =
+            __shfl_sync(kScalingFullWarpMask, row, owner_lane);
+        const std::int64_t cooperative_start =
+            __shfl_sync(kScalingFullWarpMask, start, owner_lane);
+        const std::int64_t cooperative_end =
+            __shfl_sync(kScalingFullWarpMask, end, owner_lane);
+        const HPRLP_FLOAT row_factor = row_scale[cooperative_row];
+
+        for (std::int64_t index = cooperative_start + lane;
+             index < cooperative_end; index += warpSize) {
+            values[index] *=
+                row_factor * col_scale[col_index[index]];
+        }
+        __syncwarp(kScalingFullWarpMask);
+        cooperative_rows &= cooperative_rows - 1u;
+    }
+
+    if (row >= rows || cooperative) {
+        return;
+    }
+    const HPRLP_FLOAT row_factor = row_scale[row];
+    for (std::int64_t index = start; index < end; ++index) {
+        values[index] *= row_factor * col_scale[col_index[index]];
+    }
+}
+
+
+__global__ void curtis_reid_neg_log_abs_kernel64(
+    std::size_t n, const HPRLP_FLOAT *value,
+    HPRLP_FLOAT *neg_log_abs_value) {
+    const std::size_t first =
+        static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::size_t stride =
+        static_cast<std::size_t>(gridDim.x) * blockDim.x;
+    for (std::size_t index = first; index < n; index += stride) {
+        const HPRLP_FLOAT abs_value = fmax(fabs(value[index]), 1e-300);
+        neg_log_abs_value[index] = -log(abs_value);
+    }
+}
+
 void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
                                HPRLP_FLOAT *rowNormA,
                                HPRLP_FLOAT *colNormA,
@@ -266,8 +419,10 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     set_vector_value_device(tempNorm1, lp_info_gpu->m, 0.0);
     set_vector_value_device(tempNorm2, lp_info_gpu->n, 0.0);
 
-    const int a_nonzeros = lp_info_gpu->A->numElements;
-    const int at_nonzeros = lp_info_gpu->AT->numElements;
+    const std::int64_t a_nonzeros = lp_info_gpu->A->numElements;
+    const std::int64_t at_nonzeros = lp_info_gpu->AT->numElements;
+    const bool large_offsets =
+        hprlp_sparse_has_64bit_offsets(lp_info_gpu->A);
     const std::size_t cache_entries =
         static_cast<std::size_t>(a_nonzeros) +
         static_cast<std::size_t>(at_nonzeros);
@@ -283,7 +438,7 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     }
     HPRLP_FLOAT *neg_log_abs_a = neg_log_abs_storage;
     HPRLP_FLOAT *neg_log_abs_at = use_log_cache
-        ? neg_log_abs_storage + a_nonzeros : nullptr;
+        ? neg_log_abs_storage + static_cast<std::size_t>(a_nonzeros) : nullptr;
 
     // A and AT values do not change during the Curtis--Reid fixed-point
     // iteration.  Cache exactly the same per-entry expression that the
@@ -291,54 +446,59 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     // accumulation order, row/column update order, and scaling applications
     // remain unchanged.
     if (use_log_cache) {
-        curtis_reid_neg_log_abs_kernel<<<HPRLP_NUM_BLOCKS(a_nonzeros), HPRLP_NUM_THREADS>>>(
-            a_nonzeros, lp_info_gpu->A->value, neg_log_abs_a);
-        curtis_reid_neg_log_abs_kernel<<<HPRLP_NUM_BLOCKS(at_nonzeros), HPRLP_NUM_THREADS>>>(
-            at_nonzeros, lp_info_gpu->AT->value, neg_log_abs_at);
+        if (large_offsets) {
+            const int blocks_a = static_cast<int>(std::min<std::int64_t>(
+                65535, (a_nonzeros + HPRLP_NUM_THREADS - 1) /
+                    HPRLP_NUM_THREADS));
+            const int blocks_at = static_cast<int>(std::min<std::int64_t>(
+                65535, (at_nonzeros + HPRLP_NUM_THREADS - 1) /
+                    HPRLP_NUM_THREADS));
+            curtis_reid_neg_log_abs_kernel64<<<blocks_a, HPRLP_NUM_THREADS>>>(
+                static_cast<std::size_t>(a_nonzeros), lp_info_gpu->A->value,
+                neg_log_abs_a);
+            curtis_reid_neg_log_abs_kernel64<<<blocks_at, HPRLP_NUM_THREADS>>>(
+                static_cast<std::size_t>(at_nonzeros), lp_info_gpu->AT->value,
+                neg_log_abs_at);
+        } else {
+            curtis_reid_neg_log_abs_kernel<<<
+                HPRLP_NUM_BLOCKS(a_nonzeros), HPRLP_NUM_THREADS>>>(
+                static_cast<int>(a_nonzeros), lp_info_gpu->A->value,
+                neg_log_abs_a);
+            curtis_reid_neg_log_abs_kernel<<<
+                HPRLP_NUM_BLOCKS(at_nonzeros), HPRLP_NUM_THREADS>>>(
+                static_cast<int>(at_nonzeros), lp_info_gpu->AT->value,
+                neg_log_abs_at);
+        }
     }
 
-    for (int i = 0; i < 20; ++i) {
-        if (use_log_cache) {
-            curtis_reid_log_update_kernel<<<
-                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
-                lp_info_gpu->A->row,
-                lp_info_gpu->A->rowPtr,
-                lp_info_gpu->A->colIndex,
-                lp_info_gpu->A->value,
-                neg_log_abs_a,
-                tempNorm2,
-                tempNorm1);
-
-            curtis_reid_log_update_kernel<<<
-                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
-                lp_info_gpu->AT->row,
-                lp_info_gpu->AT->rowPtr,
-                lp_info_gpu->AT->colIndex,
-                lp_info_gpu->AT->value,
-                neg_log_abs_at,
-                tempNorm1,
-                tempNorm2);
+    auto launch_log_update = [&](
+            const sparseMatrix *matrix, const HPRLP_FLOAT *cache,
+            const HPRLP_FLOAT *other_scale, HPRLP_FLOAT *result) {
+        if (hprlp_sparse_has_64bit_offsets(matrix) &&
+            hprlp_sparse_has_64bit_column_indices(matrix)) {
+            curtis_reid_log_update_kernel64<<<
+                HPRLP_NUM_BLOCKS(matrix->row), HPRLP_NUM_THREADS>>>(
+                matrix->row, matrix->rowPtr64, matrix->colIndex64,
+                matrix->value, cache, other_scale, result);
+        } else if (hprlp_sparse_has_64bit_offsets(matrix)) {
+            curtis_reid_log_update_kernel64<<<
+                HPRLP_NUM_BLOCKS(matrix->row), HPRLP_NUM_THREADS>>>(
+                matrix->row, matrix->rowPtr64, matrix->colIndex,
+                matrix->value, cache, other_scale, result);
         } else {
             curtis_reid_log_update_kernel<<<
-                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
-                lp_info_gpu->A->row,
-                lp_info_gpu->A->rowPtr,
-                lp_info_gpu->A->colIndex,
-                lp_info_gpu->A->value,
-                nullptr,
-                tempNorm2,
-                tempNorm1);
-
-            curtis_reid_log_update_kernel<<<
-                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
-                lp_info_gpu->AT->row,
-                lp_info_gpu->AT->rowPtr,
-                lp_info_gpu->AT->colIndex,
-                lp_info_gpu->AT->value,
-                nullptr,
-                tempNorm1,
-                tempNorm2);
+                HPRLP_NUM_BLOCKS(matrix->row), HPRLP_NUM_THREADS>>>(
+                matrix->row, matrix->rowPtr, matrix->colIndex,
+                matrix->value, cache, other_scale, result);
         }
+    };
+    for (int i = 0; i < 20; ++i) {
+        launch_log_update(lp_info_gpu->A,
+                          use_log_cache ? neg_log_abs_a : nullptr,
+                          tempNorm2, tempNorm1);
+        launch_log_update(lp_info_gpu->AT,
+                          use_log_cache ? neg_log_abs_at : nullptr,
+                          tempNorm1, tempNorm2);
     }
 
     const bool scale_spread_is_safe = curtis_reid_scale_spread_is_safe(
@@ -359,12 +519,45 @@ void apply_curtis_reid_scaling(LP_info_gpu *lp_info_gpu,
     // Match Julia's single expression `value *= row_scale * col_scale`.
     // Applying the two factors in separate kernels changes rounding before the
     // first solver iteration on very large models.
-    apply_curtis_reid_csr_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
-        lp_info_gpu->m, lp_info_gpu->A->rowPtr, lp_info_gpu->A->colIndex,
-        lp_info_gpu->A->value, tempNorm1, tempNorm2);
-    apply_curtis_reid_csr_kernel<<<HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
-        lp_info_gpu->n, lp_info_gpu->AT->rowPtr, lp_info_gpu->AT->colIndex,
-        lp_info_gpu->AT->value, tempNorm2, tempNorm1);
+    if (large_offsets) {
+        if (hprlp_sparse_has_64bit_column_indices(lp_info_gpu->A)) {
+            apply_curtis_reid_csr_kernel64<<<
+                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
+                lp_info_gpu->m, lp_info_gpu->A->rowPtr64,
+                lp_info_gpu->A->colIndex64, lp_info_gpu->A->value,
+                tempNorm1, tempNorm2);
+        } else {
+            apply_curtis_reid_csr_kernel64<<<
+                HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
+                lp_info_gpu->m, lp_info_gpu->A->rowPtr64,
+                lp_info_gpu->A->colIndex, lp_info_gpu->A->value,
+                tempNorm1, tempNorm2);
+        }
+        if (hprlp_sparse_has_64bit_column_indices(lp_info_gpu->AT)) {
+            apply_curtis_reid_csr_kernel64<<<
+                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
+                lp_info_gpu->n, lp_info_gpu->AT->rowPtr64,
+                lp_info_gpu->AT->colIndex64, lp_info_gpu->AT->value,
+                tempNorm2, tempNorm1);
+        } else {
+            apply_curtis_reid_csr_kernel64<<<
+                HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
+                lp_info_gpu->n, lp_info_gpu->AT->rowPtr64,
+                lp_info_gpu->AT->colIndex, lp_info_gpu->AT->value,
+                tempNorm2, tempNorm1);
+        }
+    } else {
+        apply_curtis_reid_csr_kernel<<<
+            HPRLP_NUM_BLOCKS(lp_info_gpu->m), HPRLP_NUM_THREADS>>>(
+            lp_info_gpu->m, lp_info_gpu->A->rowPtr,
+            lp_info_gpu->A->colIndex, lp_info_gpu->A->value,
+            tempNorm1, tempNorm2);
+        apply_curtis_reid_csr_kernel<<<
+            HPRLP_NUM_BLOCKS(lp_info_gpu->n), HPRLP_NUM_THREADS>>>(
+            lp_info_gpu->n, lp_info_gpu->AT->rowPtr,
+            lp_info_gpu->AT->colIndex, lp_info_gpu->AT->value,
+            tempNorm2, tempNorm1);
+    }
 
     vector_dot_product(lp_info_gpu->AL, tempNorm1, lp_info_gpu->AL, lp_info_gpu->m, false);
     vector_dot_product(lp_info_gpu->AU, tempNorm1, lp_info_gpu->AU, lp_info_gpu->m, false);
@@ -382,8 +575,10 @@ void scaling(LP_info_gpu *lp_info_gpu, Scaling_info* scaling_info, const HPRLP_p
 
     create_zero_vector_device(scaling_info->row_norm, m);
     create_zero_vector_device(scaling_info->col_norm, n);
-    create_zero_vector_device(scaling_info->l_org, n);
-    create_zero_vector_device(scaling_info->u_org, n);
+    // Legacy bound copies have no consumers; avoid two extra n-vectors.
+    // Keep fields null for compatibility with cleanup and public layout.
+    scaling_info->l_org = nullptr;
+    scaling_info->u_org = nullptr;
 
     HPRLP_FLOAT *rowNormA = scaling_info->row_norm;
     HPRLP_FLOAT *colNormA = scaling_info->col_norm;
@@ -396,8 +591,6 @@ void scaling(LP_info_gpu *lp_info_gpu, Scaling_info* scaling_info, const HPRLP_p
     set_vector_value_device(rowNormA, m, 1.0);
     set_vector_value_device(colNormA, n, 1.0);
 
-    vMemcpy_device(scaling_info->l_org, lp_info_gpu->l, n);
-    vMemcpy_device(scaling_info->u_org, lp_info_gpu->u, n);
 
     HPRLP_FLOAT *b;
     CUDA_CHECK(cudaMalloc(&b, m * sizeof(HPRLP_FLOAT)));

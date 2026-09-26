@@ -1,6 +1,35 @@
 namespace {
 
 void update_xz_normal_generic_fused_gpu(HPRLP_workspace_gpu *ws) {
+    if (ws->AT->rowPtr64 != nullptr) {
+        const int wide_value_mode =
+            ws->inverse_row_norm != nullptr &&
+            ws->inverse_col_norm != nullptr
+                ? (ws->uniform_unit_sign != 0
+                       ? 1
+                       : (ws->wide_signed_unit_ready ? 2 : 0))
+                : 0;
+        if (ws->AT->colIndex64 != nullptr) {
+            hprlp_wide_fused_x_kernel<<<
+                ws->n, kFusedThreads, 0, ws->stream>>>(
+                ws->x, ws->x_hat, ws->l, ws->u, ws->x_bound_type,
+                ws->c, ws->last_x, ws->y, ws->AT->rowPtr64,
+                ws->AT->colIndex64, ws->AT->value, ws->Halpern_params,
+                ws->halpern_factors, ws->inverse_row_norm,
+                ws->inverse_col_norm, wide_value_mode,
+                ws->uniform_unit_sign, ws->n);
+        } else {
+            hprlp_wide_fused_x_kernel<<<
+                ws->n, kFusedThreads, 0, ws->stream>>>(
+                ws->x, ws->x_hat, ws->l, ws->u, ws->x_bound_type,
+                ws->c, ws->last_x, ws->y, ws->AT->rowPtr64,
+                ws->AT->colIndex, ws->AT->value, ws->Halpern_params,
+                ws->halpern_factors, ws->inverse_row_norm,
+                ws->inverse_col_norm, wide_value_mode,
+                ws->uniform_unit_sign, ws->n);
+        }
+        return;
+    }
     if (hprlp_all_rows_short(
             ws->n, ws->num_AT_rows_short, ws->num_AT_rows_medium,
             ws->num_AT_rows_long)) {

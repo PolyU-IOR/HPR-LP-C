@@ -1,6 +1,35 @@
 namespace {
 
 void update_y_normal_generic_fused_gpu(HPRLP_workspace_gpu *ws) {
+    if (ws->A->rowPtr64 != nullptr) {
+        const int wide_value_mode =
+            ws->inverse_row_norm != nullptr &&
+            ws->inverse_col_norm != nullptr
+                ? (ws->uniform_unit_sign != 0
+                       ? 1
+                       : (ws->wide_signed_unit_ready ? 2 : 0))
+                : 0;
+        if (ws->A->colIndex64 != nullptr) {
+            hprlp_wide_fused_y_kernel<<<
+                ws->m, kFusedThreads, 0, ws->stream>>>(
+                ws->y, ws->AL, ws->AU, ws->y_bound_type,
+                ws->last_y, ws->x_hat, ws->A->rowPtr64,
+                ws->A->colIndex64, ws->A->value, ws->Halpern_params,
+                ws->halpern_factors, ws->inverse_row_norm,
+                ws->inverse_col_norm, nullptr, wide_value_mode,
+                ws->uniform_unit_sign, ws->m);
+        } else {
+            hprlp_wide_fused_y_kernel<<<
+                ws->m, kFusedThreads, 0, ws->stream>>>(
+                ws->y, ws->AL, ws->AU, ws->y_bound_type,
+                ws->last_y, ws->x_hat, ws->A->rowPtr64,
+                ws->A->colIndex, ws->A->value, ws->Halpern_params,
+                ws->halpern_factors, ws->inverse_row_norm,
+                ws->inverse_col_norm, nullptr, wide_value_mode,
+                ws->uniform_unit_sign, ws->m);
+        }
+        return;
+    }
     if (hprlp_all_rows_short(
             ws->m, ws->num_A_rows_short, ws->num_A_rows_medium,
             ws->num_A_rows_long)) {

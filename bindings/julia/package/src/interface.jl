@@ -92,6 +92,8 @@ function Model(A::AbstractMatrix{Float64},
     
     # Get dimensions
     m, n = size(A)
+    0 < m <= typemax(Int32) && 0 < n <= typemax(Int32) ||
+        error("m or n exceeds INT32_MAX; HPR-LP-C model was not created")
     
     # Validate dimensions
     @assert length(AL) == m "AL must have length m"
@@ -110,10 +112,12 @@ function Model(A::AbstractMatrix{Float64},
     
     # Now A_csr_t is a CSC matrix which represents the transpose
     # So A_csr_t.colptr is actually the rowPtr for CSR format of original A
-    rowPtr = convert(Vector{Int32}, A_csr_t.colptr .- 1)  # Convert to 0-based indexing
-    colIndex = convert(Vector{Int32}, A_csr_t.rowval .- 1)  # Convert to 0-based indexing
     values = A_csr_t.nzval
     nnz = length(values)
+    rowPtr = nnz > typemax(Int32) ?
+        Vector{Int64}(A_csr_t.colptr .- 1) :
+        Vector{Int32}(A_csr_t.colptr .- 1)
+    colIndex = Vector{Int32}(A_csr_t.rowval .- 1)
     
     # Call C function to create model
     ptr = c_create_model_from_arrays(m, n, nnz,
@@ -172,7 +176,9 @@ function model_from_hdf5(filename::String)
         matrix_size = Vector{Int64}(read(file, "A/size"))
         length(matrix_size) == 2 || error("Invalid A/size dataset in $filename")
         m, n = Int.(matrix_size)
-        colptr = Vector{Int32}(read(file, "A/colptr"))
+        0 < m <= typemax(Int32) && 0 < n <= typemax(Int32) ||
+            error("m or n exceeds INT32_MAX; HPR-LP-C model was not created")
+        colptr = Vector{Int64}(read(file, "A/colptr"))
         rowval = Vector{Int32}(read(file, "A/rowval"))
         nzval = Vector{Float64}(read(file, "A/nzval"))
         c = Vector{Float64}(read(file, "c"))
@@ -192,11 +198,15 @@ function model_from_hdf5(filename::String)
     length(AL) == m || error("Invalid AL length in $filename")
     length(AU) == m || error("Invalid AU length in $filename")
     first(colptr) == 1 || error("A/colptr must use Julia 1-based indexing")
+    issorted(colptr) || error("A/colptr must be monotone")
     last(colptr) == length(nzval) + 1 || error("Invalid final A/colptr")
     all(index -> 1 <= index <= m, rowval) ||
         error("A/rowval contains an out-of-range row index")
     colptr .-= 1
     rowval .-= 1
+    if length(nzval) <= typemax(Int32)
+        colptr = Vector{Int32}(colptr)
+    end
     ptr = c_create_model_from_arrays_with_obj_constant(
         m, n, length(nzval), colptr, rowval, nzval,
         AL, AU, l, u, c, obj_constant, true,
@@ -597,6 +607,8 @@ function solve_batched(A::AbstractMatrix{Float64},
                        params = nothing;
                        obj_constants::Union{AbstractVector{Float64}, Nothing}=nothing)
     m, n = size(A)
+    0 < m <= typemax(Int32) && 0 < n <= typemax(Int32) ||
+        error("m or n exceeds INT32_MAX; HPR-LP-C model was not created")
     model = Model(A, zeros(m), zeros(m), zeros(n), zeros(n), zeros(n))
     try
         return solve_batched(model, C, AL, AU, l, u, params; obj_constants=obj_constants)
